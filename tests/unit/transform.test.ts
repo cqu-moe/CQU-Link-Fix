@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  applyTransformer,
   assertCasServicePreserved,
   isAtrustUrl,
   isCquDomain,
@@ -19,6 +20,16 @@ describe('aTrust domain transform', () => {
   it('refuses to rewrite an aTrust hostname twice', () => {
     expect(() => toAtrustDomainUrl('https://sso-cqu-edu-cn-s.atrust.cqu.edu.cn/login')).toThrow('already uses aTrust');
   });
+
+  it.each([
+    'https://1.1.1.1/path',
+    'https://[::1]/path',
+    'https://localhost/path',
+    'https://_bad.cqu.edu.cn/path',
+    'https://bad-.cqu.edu.cn/path',
+  ])('rejects IP literals and non-DNS hosts %s', (input) => {
+    expect(() => toAtrustDomainUrl(input)).toThrow();
+  });
 });
 
 describe('aTrust IP and port transform', () => {
@@ -32,6 +43,26 @@ describe('aTrust IP and port transform', () => {
     'rejects unsupported input %s',
     (input) => expect(() => toAtrustIpPortUrl(input)).toThrow(),
   );
+
+  it.each([
+    'http://127.1:8000/path',
+    'http://0x7f.1:8000/path',
+    'http://0177.0.0.1:8000/path',
+    'http://2130706433:8000/path',
+  ])('rejects non-canonical IPv4 authority %s', (input) => {
+    expect(() => toAtrustIpPortUrl(input)).toThrow();
+  });
+
+  it.each([
+    ['http://1.1.1.1:80/path', 'https://1-1-1-1-80-p.atrust.cqu.edu.cn/path'],
+    ['https://1.1.1.1:443/path', 'https://1-1-1-1-443-p.atrust.cqu.edu.cn/path'],
+  ])('preserves explicit default port in %s', (input, expected) => {
+    expect(toAtrustIpPortUrl(input)).toBe(expected);
+  });
+
+  it('rejects userinfo in the raw authority', () => {
+    expect(() => toAtrustIpPortUrl('http://user@1.1.1.1:8000/path')).toThrow('unsupported URL');
+  });
 });
 
 describe('Youth League transform', () => {
@@ -52,6 +83,55 @@ describe('invariants', () => {
     const before = 'https://sso.cqu.edu.cn/login?service=https%3A%2F%2Fmy.cqu.edu.cn%2Fcb%3Fa%3D1';
     const after = toAtrustDomainUrl(before);
     expect(() => assertCasServicePreserved(before, after)).not.toThrow();
+  });
+
+  it('rejects a missing CAS service', () => {
+    const before = 'https://sso.cqu.edu.cn/login?service=https%3A%2F%2Fmy.cqu.edu.cn%2Fcb';
+    const after = 'https://sso-cqu-edu-cn-s.atrust.cqu.edu.cn/login';
+    expect(() => assertCasServicePreserved(before, after)).toThrow('CAS service changed');
+  });
+
+  it('rejects a changed CAS service', () => {
+    const before = 'https://sso.cqu.edu.cn/login?service=https%3A%2F%2Fmy.cqu.edu.cn%2Fcb';
+    const after = 'https://sso-cqu-edu-cn-s.atrust.cqu.edu.cn/login?service=https%3A%2F%2Fevil.example%2Fcb';
+    expect(() => assertCasServicePreserved(before, after)).toThrow('CAS service changed');
+  });
+
+  it('rejects an added duplicate CAS service', () => {
+    const before = 'https://sso.cqu.edu.cn/login?service=https%3A%2F%2Fmy.cqu.edu.cn%2Fcb';
+    const after =
+      'https://sso-cqu-edu-cn-s.atrust.cqu.edu.cn/login?service=https%3A%2F%2Fmy.cqu.edu.cn%2Fcb&service=https%3A%2F%2Fmy.cqu.edu.cn%2Fcb';
+    expect(() => assertCasServicePreserved(before, after)).toThrow('CAS service changed');
+  });
+
+  it('rejects a mutation to the second CAS service', () => {
+    const before =
+      'https://sso.cqu.edu.cn/login?service=https%3A%2F%2Ffirst.cqu.edu.cn%2Fcb&service=https%3A%2F%2Fsecond.cqu.edu.cn%2Fcb';
+    const after =
+      'https://sso-cqu-edu-cn-s.atrust.cqu.edu.cn/login?service=https%3A%2F%2Ffirst.cqu.edu.cn%2Fcb&service=https%3A%2F%2Fevil.example%2Fcb';
+    expect(() => assertCasServicePreserved(before, after)).toThrow('CAS service changed');
+  });
+});
+
+describe('transformer dispatch', () => {
+  it.each([
+    [
+      'atrust-domain' as const,
+      'https://sso.cqu.edu.cn/login',
+      'https://sso-cqu-edu-cn-s.atrust.cqu.edu.cn/login',
+    ],
+    [
+      'atrust-ip-port' as const,
+      'http://1.1.1.1:8000/path',
+      'https://1-1-1-1-8000-p.atrust.cqu.edu.cn/path',
+    ],
+    [
+      'youth-public' as const,
+      'https://youth.cqu.edu.cn/info/1009/24264.htm',
+      'https://youth.cqu.edu.cn/content.jsp?urltype=news.NewsContentUrl&wbtreeid=1009&wbnewsid=24264',
+    ],
+  ])('dispatches the %s transformer', (transformer, input, expected) => {
+    expect(applyTransformer(transformer, input)).toBe(expected);
   });
 });
 
