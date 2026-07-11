@@ -1,4 +1,5 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { CUSTOM_PERMISSION_LEASE_TTL_MS } from '../../src/custom-permission-lease';
 import { BUILT_IN_RULES } from '../../src/rules/builtins';
 import { compileDynamicRules } from '../../src/rules/dnr';
 import { getEnabledRules } from '../../src/rules/registry';
@@ -67,6 +68,7 @@ function dependencies(
     requestPermission: vi.fn().mockResolvedValue(true),
     removePermission: vi.fn().mockResolvedValue(true),
     acquirePermissionLease: vi.fn().mockResolvedValue({ nonce: crypto.randomUUID() }),
+    renewPermissionLease: vi.fn().mockResolvedValue(true),
     releasePermissionLease: vi.fn().mockResolvedValue({ requiredOrigins: [] }),
     ...overrides,
   };
@@ -94,6 +96,7 @@ async function settle(): Promise<void> {
 
 describe('options controller', () => {
   beforeEach(fixture);
+  afterEach(() => vi.useRealTimers());
 
   it('loads only the background snapshot and renders saved grouped state', async () => {
     const deps = dependencies();
@@ -556,6 +559,100 @@ describe('options controller', () => {
     resolveWinner({ ok: true, revision: 4 });
     await settle();
     expect(releaseLease).toHaveBeenCalledTimes(2);
+  });
+
+  it('renews a long permission prompt lease and stops after the prompt settles', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    const origins = [
+      '*://race.cqu.edu.cn/*',
+      'https://race-cqu-edu-cn-s.atrust.cqu.edu.cn/*',
+    ];
+    let leaseCounter = 0;
+    const leases = new Map<string, { origins: string[]; expiresAt: number }>();
+    const acquireLease = vi.fn(async (permission: ExactOriginPermission) => {
+      const nonce = `00000000-0000-4000-8000-${String(++leaseCounter).padStart(12, '0')}`;
+      leases.set(nonce, { origins: [...permission.origins], expiresAt: Date.now() + CUSTOM_PERMISSION_LEASE_TTL_MS });
+      return { nonce };
+    });
+    const renewLease = vi.fn(async (nonce: string, permission: ExactOriginPermission) => {
+      const lease = leases.get(nonce);
+      if (!lease || lease.expiresAt <= Date.now() || lease.origins.join() !== permission.origins.join()) {
+        return false;
+      }
+      lease.expiresAt = Date.now() + CUSTOM_PERMISSION_LEASE_TTL_MS;
+      return true;
+    });
+    const releaseLease = vi.fn(async (nonce: string) => {
+      leases.delete(nonce);
+      const requiredOrigins = [...leases.values()]
+        .filter((lease) => lease.expiresAt > Date.now())
+        .flatMap((lease) => lease.origins);
+      return { requiredOrigins: [...new Set(requiredOrigins)].sort() };
+    });
+    let resolvePrompt!: (granted: boolean) => void;
+    const prompt = new Promise<boolean>((resolve) => { resolvePrompt = resolve; });
+    const winner = dependencies({
+      requestPermission: vi.fn().mockReturnValue(prompt),
+      acquirePermissionLease: acquireLease,
+      renewPermissionLease: renewLease,
+      releasePermissionLease: releaseLease,
+    });
+    await initializeOptionsController(document, winner);
+    const winnerForm = document.querySelector('#custom-rule-form') as HTMLFormElement;
+    (document.querySelector('#custom-host') as HTMLInputElement).value = 'race.cqu.edu.cn';
+    winnerForm.dispatchEvent(new Event('submit', { cancelable: true }));
+    await vi.advanceTimersByTimeAsync(CUSTOM_PERMISSION_LEASE_TTL_MS * 2 + 1);
+
+    expect(renewLease).toHaveBeenCalled();
+    expect([...leases.values()][0]!.expiresAt).toBeGreaterThan(Date.now());
+
+    fixture();
+    const loserRemove = vi.fn().mockResolvedValue(true);
+    const loser = dependencies({
+      replaceSettings: vi.fn().mockResolvedValue({
+        ok: false, code: 'operation-failed', error: 'loser failed',
+      }),
+      acquirePermissionLease: acquireLease,
+      renewPermissionLease: renewLease,
+      releasePermissionLease: releaseLease,
+      removePermission: loserRemove,
+    });
+    await initializeOptionsController(document, loser);
+    (document.querySelector('#custom-host') as HTMLInputElement).value = 'race.cqu.edu.cn';
+    button('custom-submit').click();
+    await vi.runOnlyPendingTimersAsync();
+
+    expect(loserRemove).not.toHaveBeenCalled();
+    const renewalsBeforeSettle = renewLease.mock.calls.length;
+    resolvePrompt(false);
+    await vi.runOnlyPendingTimersAsync();
+    await vi.advanceTimersByTimeAsync(CUSTOM_PERMISSION_LEASE_TTL_MS);
+    expect(renewLease).toHaveBeenCalledTimes(renewalsBeforeSettle);
+  });
+
+  it('retains a newly granted permission when heartbeat renewal fails', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    let resolvePrompt!: (granted: boolean) => void;
+    const prompt = new Promise<boolean>((resolve) => { resolvePrompt = resolve; });
+    const deps = dependencies({
+      requestPermission: vi.fn().mockReturnValue(prompt),
+      renewPermissionLease: vi.fn().mockResolvedValue(false),
+      replaceSettings: vi.fn().mockResolvedValue({
+        ok: false, code: 'operation-failed', error: 'save failed',
+      }),
+    });
+    await initializeOptionsController(document, deps);
+    (document.querySelector('#custom-host') as HTMLInputElement).value = 'library.cqu.edu.cn';
+    button('custom-submit').click();
+
+    await vi.advanceTimersByTimeAsync(CUSTOM_PERMISSION_LEASE_TTL_MS / 3);
+    resolvePrompt(true);
+    await vi.runOnlyPendingTimersAsync();
+
+    expect(deps.renewPermissionLease).toHaveBeenCalledOnce();
+    expect(deps.removePermission).not.toHaveBeenCalled();
   });
 
   it('rolls back an unrelated failed grant while another lease remains active', async () => {

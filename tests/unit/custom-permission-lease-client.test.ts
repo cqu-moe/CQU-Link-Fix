@@ -3,6 +3,7 @@ import { fakeBrowser } from 'wxt/testing/fake-browser';
 import {
   acquireCustomPermissionLeaseViaBackground,
   releaseCustomPermissionLeaseViaBackground,
+  renewCustomPermissionLeaseViaBackground,
 } from '../../src/ui/custom-permission-lease-client';
 import type { ExactOriginPermission } from '../../src/ui/custom-rule';
 
@@ -22,14 +23,16 @@ function mockSendMessage(): MockInstance<SendMessage> {
 describe('custom permission lease client', () => {
   beforeEach(() => fakeBrowser.reset());
 
-  it('uses typed acquire and release background messages', async () => {
+  it('uses typed acquire, renew, and release background messages', async () => {
     const send = mockSendMessage()
       .mockResolvedValueOnce({ ok: true, leaseNonce: NONCE })
+      .mockResolvedValueOnce({ ok: true, leaseExpiresAt: 123_000 })
       .mockResolvedValueOnce({ ok: true, requiredOrigins: [...PERMISSION.origins].reverse() });
 
     await expect(acquireCustomPermissionLeaseViaBackground(PERMISSION)).resolves.toEqual({
       nonce: NONCE,
     });
+    await expect(renewCustomPermissionLeaseViaBackground(NONCE, PERMISSION)).resolves.toBe(true);
     await expect(releaseCustomPermissionLeaseViaBackground(NONCE)).resolves.toEqual({
       requiredOrigins: [...PERMISSION.origins].sort(),
     });
@@ -38,6 +41,11 @@ describe('custom permission lease client', () => {
       origins: PERMISSION.origins,
     });
     expect(send).toHaveBeenNthCalledWith(2, {
+      type: 'renew-custom-permission-lease',
+      nonce: NONCE,
+      origins: PERMISSION.origins,
+    });
+    expect(send).toHaveBeenNthCalledWith(3, {
       type: 'release-custom-permission-lease',
       nonce: NONCE,
     });
@@ -52,6 +60,17 @@ describe('custom permission lease client', () => {
     mockSendMessage().mockResolvedValue(response);
 
     await expect(acquireCustomPermissionLeaseViaBackground(PERMISSION)).resolves.toBeNull();
+  });
+
+  it.each([
+    { ok: true },
+    { ok: true, leaseExpiresAt: -1 },
+    { ok: true, leaseExpiresAt: 123_000, extra: true },
+    { ok: false, error: 'failed' },
+  ])('fails closed on malformed renew response %#', async (response) => {
+    mockSendMessage().mockResolvedValue(response);
+
+    await expect(renewCustomPermissionLeaseViaBackground(NONCE, PERMISSION)).resolves.toBe(false);
   });
 
   it.each([

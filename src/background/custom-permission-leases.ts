@@ -51,6 +51,39 @@ export async function acquireCustomPermissionLease(
   });
 }
 
+export async function renewCustomPermissionLease(
+  nonce: string,
+  originsInput: unknown,
+  now?: number,
+): Promise<{ expiresAt: number }> {
+  if (!isCustomPermissionLeaseNonce(nonce)) throw new Error('Custom permission lease nonce is invalid');
+  const origins = parseCustomPermissionOriginPair(originsInput);
+  return queueLeaseMutation(async () => {
+    const mutationNow = now ?? Date.now();
+    const leases = await loadActiveLeases(mutationNow);
+    const matching = leases.filter((lease) => lease.nonce === nonce);
+    if (
+      matching.length !== 1 ||
+      matching[0]!.origins[0] !== origins[0] ||
+      matching[0]!.origins[1] !== origins[1]
+    ) {
+      await writeLeases(leases);
+      throw new Error('Custom permission lease was not found, expired, or did not match');
+    }
+    const renewed = leases.map((lease): CustomPermissionLeaseRecord =>
+      lease.nonce === nonce
+        ? {
+            ...lease,
+            createdAt: mutationNow,
+            expiresAt: mutationNow + CUSTOM_PERMISSION_LEASE_TTL_MS,
+          }
+        : lease,
+    );
+    await writeLeases(renewed);
+    return { expiresAt: mutationNow + CUSTOM_PERMISSION_LEASE_TTL_MS };
+  });
+}
+
 export async function releaseCustomPermissionLease(
   nonce: string,
   now?: number,

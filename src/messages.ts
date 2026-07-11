@@ -20,6 +20,11 @@ export type BackgroundMessage =
   | { type: 'replace-settings'; settings: EditableSettings; expectedRevision: number }
   | { type: 'persist-all-cqu-mode'; enabled: boolean }
   | { type: 'acquire-custom-permission-lease'; origins: CustomPermissionOriginPair }
+  | {
+      type: 'renew-custom-permission-lease';
+      nonce: string;
+      origins: CustomPermissionOriginPair;
+    }
   | { type: 'release-custom-permission-lease'; nonce: string };
 
 export type BackgroundResponse =
@@ -28,6 +33,7 @@ export type BackgroundResponse =
   | { ok: true; revision: number }
   | { ok: true; snapshot: SettingsSnapshot }
   | { ok: true; leaseNonce: string }
+  | { ok: true; leaseExpiresAt: number }
   | { ok: true; requiredOrigins: string[] }
   | { ok: false; error: string; code?: 'settings-conflict' | 'operation-failed' };
 
@@ -40,6 +46,13 @@ export function isBackgroundMessage(value: unknown): value is BackgroundMessage 
   }
   if (candidate.type === 'acquire-custom-permission-lease') {
     if (Object.keys(candidate).length !== 2) return false;
+    try { parseCustomPermissionOriginPair(candidate.origins); return true; } catch { return false; }
+  }
+  if (candidate.type === 'renew-custom-permission-lease') {
+    if (
+      Object.keys(candidate).length !== 3 ||
+      !isCustomPermissionLeaseNonce(candidate.nonce)
+    ) return false;
     try { parseCustomPermissionOriginPair(candidate.origins); return true; } catch { return false; }
   }
   if (candidate.type === 'release-custom-permission-lease') {

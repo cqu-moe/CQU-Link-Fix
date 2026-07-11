@@ -17,9 +17,10 @@ import {
   toEditableSettings,
   type OptionsRuleModel,
 } from './options-model';
-import type {
-  CustomPermissionLeaseHandle,
-  CustomPermissionLeaseRelease,
+import {
+  CUSTOM_PERMISSION_LEASE_RENEW_INTERVAL_MS,
+  type CustomPermissionLeaseHandle,
+  type CustomPermissionLeaseRelease,
 } from '../custom-permission-lease';
 
 export type { ExactOriginPermission } from './custom-rule';
@@ -42,6 +43,10 @@ export interface OptionsControllerDependencies {
   acquirePermissionLease: (
     permission: ExactOriginPermission,
   ) => Promise<CustomPermissionLeaseHandle | null>;
+  renewPermissionLease: (
+    nonce: string,
+    permission: ExactOriginPermission,
+  ) => Promise<boolean>;
   releasePermissionLease: (
     nonce: string,
   ) => Promise<CustomPermissionLeaseRelease | null>;
@@ -67,6 +72,58 @@ interface CommitResult {
 }
 
 type RenderableRule = OptionsRuleModel;
+
+interface CustomPermissionLeaseHeartbeat {
+  stop: () => Promise<boolean>;
+}
+
+function startCustomPermissionLeaseHeartbeat(
+  nonce: string,
+  permission: ExactOriginPermission,
+  renew: OptionsControllerDependencies['renewPermissionLease'],
+): CustomPermissionLeaseHeartbeat {
+  let stopped = false;
+  let ownershipCertain = true;
+  let renewal: Promise<void> | null = null;
+  let timer: ReturnType<typeof setInterval> | null = null;
+
+  const stopTimer = (): void => {
+    stopped = true;
+    if (timer !== null) {
+      clearInterval(timer);
+      timer = null;
+    }
+  };
+  const runRenewal = (): Promise<void> => {
+    if (stopped || renewal !== null) return Promise.resolve();
+    renewal = (async () => {
+      try {
+        if (!await renew(nonce, permission)) {
+          ownershipCertain = false;
+          stopTimer();
+        }
+      } catch {
+        ownershipCertain = false;
+        stopTimer();
+      }
+    })().finally(() => {
+      renewal = null;
+    });
+    return renewal;
+  };
+
+  timer = setInterval(() => {
+    void runRenewal();
+  }, CUSTOM_PERMISSION_LEASE_RENEW_INTERVAL_MS);
+
+  return {
+    stop: async () => {
+      stopTimer();
+      if (renewal) await renewal;
+      return ownershipCertain;
+    },
+  };
+}
 
 const initializedScopes = new WeakSet<Element>();
 
@@ -455,67 +512,83 @@ export async function initializeOptionsController(
     let requestOperation: Promise<boolean>;
     try {
       requestOperation = dependencies.requestPermission(permission);
-    } catch (error) {
-      requestOperation = Promise.reject(error);
+    } catch {
+      requestOperation = Promise.resolve(false);
     }
-    const coordinationOperation = Promise.allSettled([leaseOperation, requestOperation]);
-
     void (async () => {
-      const [leaseResult, requestResult] = await coordinationOperation;
-      const lease = leaseResult?.status === 'fulfilled' ? leaseResult.value : null;
-      const granted = requestResult?.status === 'fulfilled' && requestResult.value;
-      if (!lease) {
-        elements.customError.textContent = '无法建立权限协调租约；规则未保存，访问权限已保留。';
-        return;
-      }
-      if (!granted) {
-        await dependencies.releasePermissionLease(lease.nonce);
-        elements.customError.textContent = '未授予该域名的访问权限，规则未保存。';
-        return;
-      }
-      const containment = await containmentOperation;
-      const canProveOwnership = containment.every((result) => result.status === 'fulfilled');
-      const newlyAcquiredOrigins = canProveOwnership
-        ? permission.origins.filter((_, index) =>
-          containment[index]!.status === 'fulfilled' && !containment[index]!.value,
-        )
-        : null;
-
-      const result = await commit({
-        ...toEditableSettings(saved!.settings),
-        customRules: [...saved!.settings.customRules, rule],
-      }, `已添加 ${rule.name}`);
-      if (result.outcome === 'success') {
-        elements.customHost.value = '';
-        await dependencies.releasePermissionLease(lease.nonce);
-        return;
-      }
-      elements.customError.textContent = result.outcome === 'conflict'
-        ? '设置已更新，请重新填写并添加该规则。'
-        : '规则未保存。';
-      const fresh = result.snapshotAfterFailure === undefined
-        ? await reloadSavedSnapshot()
-        : result.snapshotAfterFailure;
-      const released = await dependencies.releasePermissionLease(lease.nonce);
-      if (!fresh || !released || newlyAcquiredOrigins === null) {
-        elements.customError.textContent = '规则未保存，且无法安全确认权限归属；已保留访问权限。';
-        return;
-      }
-      const requiredOrigins = new Set(released.requiredOrigins);
-      const removableOrigins = newlyAcquiredOrigins.filter(
-        (origin) => !requiredOrigins.has(origin),
-      );
-      if (removableOrigins.length > 0) {
-        try {
-          await dependencies.removePermission({ origins: removableOrigins });
-        } catch {
-          // Best effort: the visible save failure remains the authoritative outcome.
+      let heartbeat: CustomPermissionLeaseHeartbeat | null = null;
+      try {
+        let lease: CustomPermissionLeaseHandle | null = null;
+        try { lease = await leaseOperation; } catch { lease = null; }
+        if (!lease) {
+          try { await requestOperation; } catch { /* The grant state is uncertain; retain it. */ }
+          elements.customError.textContent = '无法建立权限协调租约；规则未保存，访问权限已保留。';
+          return;
         }
+        heartbeat = startCustomPermissionLeaseHeartbeat(
+          lease.nonce,
+          permission,
+          dependencies.renewPermissionLease,
+        );
+
+        let granted = false;
+        try { granted = await requestOperation; } catch { granted = false; }
+        if (!granted) {
+          await heartbeat.stop();
+          try { await dependencies.releasePermissionLease(lease.nonce); } catch { /* TTL cleanup remains. */ }
+          elements.customError.textContent = '未授予该域名的访问权限，规则未保存。';
+          return;
+        }
+        const containment = await containmentOperation;
+        const canProveOwnership = containment.every((result) => result.status === 'fulfilled');
+        const newlyAcquiredOrigins = canProveOwnership
+          ? permission.origins.filter((_, index) =>
+            containment[index]!.status === 'fulfilled' && !containment[index]!.value,
+          )
+          : null;
+
+        const result = await commit({
+          ...toEditableSettings(saved!.settings),
+          customRules: [...saved!.settings.customRules, rule],
+        }, `已添加 ${rule.name}`);
+        if (result.outcome === 'success') {
+          elements.customHost.value = '';
+          await heartbeat.stop();
+          try { await dependencies.releasePermissionLease(lease.nonce); } catch { /* TTL cleanup remains. */ }
+          return;
+        }
+        elements.customError.textContent = result.outcome === 'conflict'
+          ? '设置已更新，请重新填写并添加该规则。'
+          : '规则未保存。';
+        const fresh = result.snapshotAfterFailure === undefined
+          ? await reloadSavedSnapshot()
+          : result.snapshotAfterFailure;
+        const leaseOwnershipCertain = await heartbeat.stop();
+        let released: CustomPermissionLeaseRelease | null = null;
+        try { released = await dependencies.releasePermissionLease(lease.nonce); } catch { released = null; }
+        if (!fresh || !released || newlyAcquiredOrigins === null || !leaseOwnershipCertain) {
+          elements.customError.textContent = '规则未保存，且无法安全确认权限归属；已保留访问权限。';
+          return;
+        }
+        const requiredOrigins = new Set(released.requiredOrigins);
+        const removableOrigins = newlyAcquiredOrigins.filter(
+          (origin) => !requiredOrigins.has(origin),
+        );
+        if (removableOrigins.length > 0) {
+          try {
+            await dependencies.removePermission({ origins: removableOrigins });
+          } catch {
+            // Best effort: the visible save failure remains the authoritative outcome.
+          }
+        }
+      } catch {
+        elements.customError.textContent = '权限处理未完成；规则未保存，访问权限已保留。';
+      } finally {
+        if (heartbeat) await heartbeat.stop();
+        pending = false;
+        render();
       }
-    })().finally(() => {
-      pending = false;
-      render();
-    });
+    })();
   });
 
   elements.master.checked = false;

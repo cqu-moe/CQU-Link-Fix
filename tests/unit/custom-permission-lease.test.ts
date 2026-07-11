@@ -3,6 +3,7 @@ import { fakeBrowser } from 'wxt/testing/fake-browser';
 import {
   acquireCustomPermissionLease,
   releaseCustomPermissionLease,
+  renewCustomPermissionLease,
 } from '../../src/background/custom-permission-leases';
 import { CUSTOM_PERMISSION_LEASE_TTL_MS } from '../../src/custom-permission-lease';
 import type { CustomRule } from '../../src/rules/types';
@@ -47,6 +48,73 @@ describe('custom permission leases', () => {
         expiresAt: 1_000 + CUSTOM_PERMISSION_LEASE_TTL_MS,
       }],
     }));
+  });
+
+  it('renews only an active nonce-bound exact-origin lease from the mutation time', async () => {
+    const lease = await acquireCustomPermissionLease([...LIBRARY_ORIGINS], 1_000);
+
+    await expect(renewCustomPermissionLease(
+      lease.nonce,
+      [...LIBRARY_ORIGINS],
+      41_000,
+    )).resolves.toEqual({ expiresAt: 41_000 + CUSTOM_PERMISSION_LEASE_TTL_MS });
+    expect((await browser.storage.session.get()).customPermissionLeases).toEqual([{
+      nonce: lease.nonce,
+      origins: LIBRARY_ORIGINS,
+      createdAt: 41_000,
+      expiresAt: 41_000 + CUSTOM_PERMISSION_LEASE_TTL_MS,
+    }]);
+  });
+
+  it('rejects renewal for a mismatched pair without changing the active lease', async () => {
+    const lease = await acquireCustomPermissionLease([...LIBRARY_ORIGINS], 1_000);
+    const before = await browser.storage.session.get();
+
+    await expect(renewCustomPermissionLease(
+      lease.nonce,
+      [...NEWS_ORIGINS],
+      2_000,
+    )).rejects.toThrow(/match|lease/i);
+    expect(await browser.storage.session.get()).toEqual(before);
+  });
+
+  it('cannot renew missing, expired, or future-corrupt leases', async () => {
+    const active = await acquireCustomPermissionLease([...LIBRARY_ORIGINS], 1_000);
+    await expect(renewCustomPermissionLease(
+      active.nonce,
+      [...LIBRARY_ORIGINS],
+      1_000 + CUSTOM_PERMISSION_LEASE_TTL_MS,
+    )).rejects.toThrow(/expired|not found/i);
+    await expect(renewCustomPermissionLease(
+      '00000000-0000-4000-8000-000000000099',
+      [...LIBRARY_ORIGINS],
+      1_001,
+    )).rejects.toThrow(/expired|not found/i);
+
+    const futureNonce = '00000000-0000-4000-8000-000000000098';
+    await browser.storage.session.set({
+      customPermissionLeases: [{
+        nonce: futureNonce,
+        origins: LIBRARY_ORIGINS,
+        createdAt: 5_000,
+        expiresAt: 5_000 + CUSTOM_PERMISSION_LEASE_TTL_MS,
+      }],
+    });
+    await expect(renewCustomPermissionLease(
+      futureNonce,
+      [...LIBRARY_ORIGINS],
+      4_000,
+    )).rejects.toThrow(/expired|not found/i);
+  });
+
+  it('lets an abandoned lease expire when its page no longer renews', async () => {
+    const abandoned = await acquireCustomPermissionLease([...LIBRARY_ORIGINS], 1_000);
+
+    await expect(releaseCustomPermissionLease(
+      abandoned.nonce,
+      1_000 + CUSTOM_PERMISSION_LEASE_TTL_MS + 1,
+    )).rejects.toThrow(/expired|not found/i);
+    expect((await browser.storage.session.get()).customPermissionLeases).toEqual([]);
   });
 
   it.each([
@@ -147,5 +215,29 @@ describe('custom permission leases', () => {
     await blocker;
 
     await expect(delayedRelease).rejects.toThrow(/expired|not found/i);
+  });
+
+  it('samples renewal time inside the serialized mutation boundary', async () => {
+    const library = await acquireCustomPermissionLease([...LIBRARY_ORIGINS], 1_000);
+    const writeGate = deferred<void>();
+    const originalSet = browser.storage.session.set.bind(browser.storage.session);
+    const storageSet = vi.spyOn(browser.storage.session, 'set')
+      .mockImplementationOnce(async (items) => {
+        await writeGate.promise;
+        await originalSet(items);
+      })
+      .mockImplementation(originalSet);
+    const now = vi.spyOn(Date, 'now').mockReturnValue(2_000);
+    const blocker = acquireCustomPermissionLease([...NEWS_ORIGINS]);
+    await vi.waitFor(() => expect(storageSet).toHaveBeenCalledOnce());
+    const delayedRenewal = renewCustomPermissionLease(library.nonce, [...LIBRARY_ORIGINS]);
+
+    now.mockReturnValue(100_000);
+    writeGate.resolve();
+    await blocker;
+
+    await expect(delayedRenewal).resolves.toEqual({
+      expiresAt: 100_000 + CUSTOM_PERMISSION_LEASE_TTL_MS,
+    });
   });
 });

@@ -39,6 +39,29 @@ export async function acquireCustomPermissionLeaseViaBackground(
   }
 }
 
+export async function renewCustomPermissionLeaseViaBackground(
+  nonce: string,
+  permission: ExactOriginPermission,
+): Promise<boolean> {
+  if (!isCustomPermissionLeaseNonce(nonce)) return false;
+  let origins: CustomPermissionOriginPair;
+  try { origins = parseCustomPermissionOriginPair(permission.origins); } catch { return false; }
+  try {
+    const response = await browser.runtime.sendMessage({
+      type: 'renew-custom-permission-lease',
+      nonce,
+      origins,
+    }) as unknown;
+    return isPlainObject(response) &&
+      hasExactKeys(response, ['leaseExpiresAt', 'ok']) &&
+      response.ok === true &&
+      Number.isSafeInteger(response.leaseExpiresAt) &&
+      (response.leaseExpiresAt as number) >= 0;
+  } catch {
+    return false;
+  }
+}
+
 export async function releaseCustomPermissionLeaseViaBackground(
   nonce: string,
 ): Promise<CustomPermissionLeaseRelease | null> {

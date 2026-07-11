@@ -1,6 +1,8 @@
 import { normalizeCustomCquHost } from './rules/custom-rule-policy';
 
 export const CUSTOM_PERMISSION_LEASE_TTL_MS = 120_000;
+export const CUSTOM_PERMISSION_LEASE_RENEW_INTERVAL_MS =
+  Math.floor(CUSTOM_PERMISSION_LEASE_TTL_MS / 3);
 
 export type CustomPermissionOriginPair = [string, string];
 

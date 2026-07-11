@@ -37,6 +37,7 @@ import {
 import {
   acquireCustomPermissionLease,
   releaseCustomPermissionLease,
+  renewCustomPermissionLease,
 } from '../src/background/custom-permission-leases';
 
 let reconciliationQueue = Promise.resolve();
@@ -220,6 +221,10 @@ async function dispatchBackgroundMessage(
   if (message.type === 'acquire-custom-permission-lease') {
     const lease = await acquireCustomPermissionLease(message.origins);
     return { ok: true, leaseNonce: lease.nonce };
+  }
+  if (message.type === 'renew-custom-permission-lease') {
+    const lease = await renewCustomPermissionLease(message.nonce, message.origins);
+    return { ok: true, leaseExpiresAt: lease.expiresAt };
   }
   if (message.type === 'release-custom-permission-lease') {
     const released = await releaseCustomPermissionLease(message.nonce);

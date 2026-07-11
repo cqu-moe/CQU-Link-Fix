@@ -9,6 +9,7 @@ import { initializeOptionsController } from '../../src/ui/options-controller';
 import {
   acquireCustomPermissionLeaseViaBackground,
   releaseCustomPermissionLeaseViaBackground,
+  renewCustomPermissionLeaseViaBackground,
 } from '../../src/ui/custom-permission-lease-client';
 
 let started = false;
@@ -30,6 +31,7 @@ function startOptions(): void {
     requestPermission: (permission) => browser.permissions.request(permission),
     removePermission: (permission) => browser.permissions.remove(permission),
     acquirePermissionLease: acquireCustomPermissionLeaseViaBackground,
+    renewPermissionLease: renewCustomPermissionLeaseViaBackground,
     releasePermissionLease: releaseCustomPermissionLeaseViaBackground,
   }).catch(showStartupFailure);
 }

@@ -1077,6 +1077,19 @@ describe('background session lifecycle, errors, and messages', () => {
       type: 'acquire-custom-permission-lease',
       origins: ['*://library.cqu.edu.cn/*', 'https://wrong-s.atrust.cqu.edu.cn/*'],
     },
+    {
+      type: 'renew-custom-permission-lease',
+      nonce: '00000000-0000-4000-8000-000000000001',
+      origins: ['*://library.cqu.edu.cn/*', 'https://wrong-s.atrust.cqu.edu.cn/*'],
+    },
+    {
+      type: 'renew-custom-permission-lease',
+      nonce: 'forged',
+      origins: [
+        '*://library.cqu.edu.cn/*',
+        'https://library-cqu-edu-cn-s.atrust.cqu.edu.cn/*',
+      ],
+    },
     { type: 'release-custom-permission-lease', nonce: 'forged' },
   ])('rejects malformed custom permission lease message before dispatch: %#', async (message) => {
     await startBackground();
@@ -1087,7 +1100,7 @@ describe('background session lifecycle, errors, and messages', () => {
     )).resolves.toEqual([undefined]);
   });
 
-  it('accepts trusted lease messages and rejects the same acquire message from a tab sender', async () => {
+  it('accepts trusted lease messages and rejects acquire and renew from a tab sender', async () => {
     await startBackground();
     const acquire = {
       type: 'acquire-custom-permission-lease',
@@ -1106,6 +1119,23 @@ describe('background session lifecycle, errors, and messages', () => {
       { id: browser.runtime.id },
     ))[0] as unknown as { ok: true; leaseNonce: string };
     expect(acquired).toEqual({ ok: true, leaseNonce: expect.stringMatching(/^[0-9a-f-]{36}$/) });
+
+    const renew = {
+      type: 'renew-custom-permission-lease',
+      nonce: acquired.leaseNonce,
+      origins: acquire.origins,
+    };
+    await expect(fakeBrowser.runtime.onMessage.trigger(
+      renew,
+      { id: browser.runtime.id, tab: tab() } as never,
+    )).resolves.toEqual([undefined]);
+    await expect(fakeBrowser.runtime.onMessage.trigger(
+      renew,
+      { id: browser.runtime.id },
+    )).resolves.toEqual([{
+      ok: true,
+      leaseExpiresAt: expect.any(Number),
+    }]);
 
     await expect(fakeBrowser.runtime.onMessage.trigger({
       type: 'release-custom-permission-lease',
