@@ -6,6 +6,7 @@ import {
 } from './storage/settings';
 import {
   isCustomPermissionLeaseNonce,
+  parseCustomPermissionCleanupOrigins,
   parseCustomPermissionOriginPair,
   type CustomPermissionOriginPair,
 } from './custom-permission-lease';
@@ -18,31 +19,35 @@ export type BackgroundMessage =
   | { type: 'exclude-current-host'; tabId: number }
   | { type: 'get-settings-snapshot' }
   | { type: 'replace-settings'; settings: EditableSettings; expectedRevision: number }
-  | { type: 'persist-all-cqu-mode'; enabled: boolean }
+  | { type: 'reconcile-all-cqu-mode'; requested: boolean }
   | { type: 'acquire-custom-permission-lease'; origins: CustomPermissionOriginPair }
   | {
       type: 'renew-custom-permission-lease';
       nonce: string;
       origins: CustomPermissionOriginPair;
     }
-  | { type: 'release-custom-permission-lease'; nonce: string };
+  | { type: 'release-custom-permission-lease'; nonce: string; cleanupOrigins: string[] };
 
 export type BackgroundResponse =
   | { ok: true; state: RewriteRecord | null }
   | { ok: true }
   | { ok: true; revision: number }
+  | { ok: true; revision: number; enabled: boolean }
   | { ok: true; snapshot: SettingsSnapshot }
   | { ok: true; leaseNonce: string }
   | { ok: true; leaseExpiresAt: number }
-  | { ok: true; requiredOrigins: string[] }
-  | { ok: false; error: string; code?: 'settings-conflict' | 'operation-failed' };
+  | {
+      ok: false;
+      error: string;
+      code?: 'settings-conflict' | 'settings-apply-failed' | 'operation-failed';
+    };
 
 export function isBackgroundMessage(value: unknown): value is BackgroundMessage {
   if (!value || typeof value !== 'object') return false;
   const candidate = value as Record<string, unknown>;
   if (candidate.type === 'get-settings-snapshot') return Object.keys(candidate).length === 1;
-  if (candidate.type === 'persist-all-cqu-mode') {
-    return Object.keys(candidate).length === 2 && typeof candidate.enabled === 'boolean';
+  if (candidate.type === 'reconcile-all-cqu-mode') {
+    return Object.keys(candidate).length === 2 && typeof candidate.requested === 'boolean';
   }
   if (candidate.type === 'acquire-custom-permission-lease') {
     if (Object.keys(candidate).length !== 2) return false;
@@ -56,8 +61,11 @@ export function isBackgroundMessage(value: unknown): value is BackgroundMessage 
     try { parseCustomPermissionOriginPair(candidate.origins); return true; } catch { return false; }
   }
   if (candidate.type === 'release-custom-permission-lease') {
-    return Object.keys(candidate).length === 2 &&
-      isCustomPermissionLeaseNonce(candidate.nonce);
+    if (
+      Object.keys(candidate).length !== 3 ||
+      !isCustomPermissionLeaseNonce(candidate.nonce)
+    ) return false;
+    try { parseCustomPermissionCleanupOrigins(candidate.cleanupOrigins); return true; } catch { return false; }
   }
   if (candidate.type === 'replace-settings') {
     if (

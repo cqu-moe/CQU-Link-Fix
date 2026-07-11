@@ -52,10 +52,21 @@ describe('popup model', () => {
       originalHost: 'library.cqu.edu.cn',
       targetHost: 'library.cqu.edu.cn',
       canBypass: false,
-      canExclude: false,
+      canExclude: true,
       ruleId: null,
       error: null,
     });
+  });
+
+  it('uses truthful Youth copy for the same-host public-link transformation', () => {
+    expect(buildPopupModel(
+      'https://youth.cqu.edu.cn/content.jsp?urltype=news.NewsContentUrl&wbtreeid=1009&wbnewsid=24264',
+      rewriteRecord({
+        ruleId: 'addon-youth-public',
+        originalUrl: 'https://youth.cqu.edu.cn/info/1009/24264.htm',
+        targetUrl: 'https://youth.cqu.edu.cn/content.jsp?urltype=news.NewsContentUrl&wbtreeid=1009&wbnewsid=24264',
+      }),
+    ).status).toBe('已转换为团委公网链接');
   });
 
   it('surfaces a detected navigation error only for the matching target', () => {
@@ -91,7 +102,7 @@ describe('popup model', () => {
     )).toMatchObject({
       status: '当前页面未改写',
       canBypass: false,
-      canExclude: false,
+      canExclude: true,
       ruleId: null,
       error: null,
     });

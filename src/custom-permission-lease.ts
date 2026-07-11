@@ -17,8 +17,9 @@ export interface CustomPermissionLeaseHandle {
   nonce: string;
 }
 
-export interface CustomPermissionLeaseRelease {
-  requiredOrigins: string[];
+export interface CustomPermissionLeaseReleaseOptions {
+  cleanupOrigins?: string[];
+  now?: number;
 }
 
 const LEASE_NONCE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
@@ -51,16 +52,14 @@ export function parseCustomPermissionOriginPair(value: unknown): CustomPermissio
   return [...expected];
 }
 
-export function parseRequiredCustomPermissionOrigins(value: unknown): string[] {
+export function parseCustomPermissionCleanupOrigins(value: unknown): string[] {
   if (!Array.isArray(value) || value.some((origin) =>
     typeof origin !== 'string' || !isStrictCustomPermissionOrigin(origin),
-  )) {
-    throw new Error('Required custom permission origins are invalid');
-  }
+  )) throw new Error('Custom permission cleanup origins are invalid');
   return [...new Set(value)].sort();
 }
 
-function isStrictCustomPermissionOrigin(origin: string): boolean {
+export function isStrictCustomPermissionOrigin(origin: string): boolean {
   const sourceMatch = SOURCE_ORIGIN.exec(origin);
   if (sourceMatch) {
     try { return customPermissionOriginsForHost(sourceMatch[1])[0] === origin; } catch { return false; }

@@ -6,11 +6,12 @@ import {
   normalizeCustomCquHost,
   normalizeDnsHost,
 } from '../rules/custom-rule-policy';
+import { queueBackgroundOperation } from '../background/coordination';
 
 export interface ExtensionSettings {
   enabled: boolean;
   enableAllCquDomains: boolean;
-  disabledBuiltInRuleIds: string[];
+  disabledRuleIds: string[];
   customRules: CustomRule[];
   excludedHosts: string[];
 }
@@ -19,25 +20,36 @@ export type EditableSettings = Omit<ExtensionSettings, 'enableAllCquDomains'>;
 export interface SettingsSnapshot { settings: ExtensionSettings; revision: number }
 export type ReplaceSettingsResult =
   | { ok: true; revision: number }
-  | { ok: false; code: 'settings-conflict' | 'operation-failed'; error: string };
+  | {
+      ok: false;
+      code: 'settings-conflict' | 'settings-apply-failed' | 'operation-failed';
+      error: string;
+    };
+
+export interface SettingsMutationHooks {
+  apply: (next: ExtensionSettings) => Promise<void>;
+  afterApply?: (
+    next: ExtensionSettings,
+    previous: ExtensionSettings,
+  ) => Promise<void>;
+}
 
 export const DEFAULT_SETTINGS: ExtensionSettings = {
   enabled: true,
   enableAllCquDomains: false,
-  disabledBuiltInRuleIds: [],
+  disabledRuleIds: [],
   customRules: [],
   excludedHosts: [],
 };
 
 const SETTINGS_KEY = 'settings';
 const SETTINGS_REVISION_KEY = 'settingsRevision';
-const CQU_OPTIONAL_ORIGINS = {
+export const CQU_OPTIONAL_ORIGINS = {
   origins: ['*://cqu.edu.cn/*', '*://*.cqu.edu.cn/*'],
 };
 const BUILT_IN_RULE_IDS = new Set(BUILT_IN_RULES.map((rule) => rule.id));
 const BUILT_IN_DNR_IDS = new Set(BUILT_IN_RULES.map((rule) => rule.dnrId));
 const EXCLUSION_DNR_ID_START = 80_000;
-let settingsWriteQueue = Promise.resolve();
 
 export async function loadSettings(): Promise<ExtensionSettings> {
   return (await loadSettingsSnapshot()).settings;
@@ -45,13 +57,28 @@ export async function loadSettings(): Promise<ExtensionSettings> {
 
 export async function loadSettingsSnapshot(): Promise<SettingsSnapshot> {
   const stored = await browser.storage.local.get([SETTINGS_KEY, SETTINGS_REVISION_KEY]);
-  const merged = {
-    ...DEFAULT_SETTINGS,
-    ...(stored[SETTINGS_KEY] as Partial<ExtensionSettings> | undefined),
-  };
+  const value = stored[SETTINGS_KEY];
+  let settings = structuredClone(DEFAULT_SETTINGS);
+  if (isPlainObject(value)) {
+    const allowed = new Set(Object.keys(DEFAULT_SETTINGS));
+    if (Object.keys(value).every((key) => allowed.has(key))) {
+      const merged = { ...DEFAULT_SETTINGS, ...value } as Record<string, unknown>;
+      if (
+        typeof merged.enabled === 'boolean' &&
+        typeof merged.enableAllCquDomains === 'boolean' &&
+        Array.isArray(merged.disabledRuleIds) &&
+        merged.disabledRuleIds.every((item) => typeof item === 'string') &&
+        Array.isArray(merged.customRules) &&
+        Array.isArray(merged.excludedHosts) &&
+        merged.excludedHosts.every((item) => typeof item === 'string')
+      ) {
+        settings = structuredClone(merged) as unknown as ExtensionSettings;
+      }
+    }
+  }
   const revision = stored[SETTINGS_REVISION_KEY];
   return {
-    settings: structuredClone(merged),
+    settings,
     revision: Number.isSafeInteger(revision) && (revision as number) >= 0 ? revision as number : 0,
   };
 }
@@ -94,10 +121,6 @@ export async function getSettingsSnapshotViaBackground(): Promise<SettingsSnapsh
   } catch { return null; }
 }
 
-async function persistAllCquModeViaBackground(enabled: boolean): Promise<boolean> {
-  return (await sendSettingsMutationMessage({ type: 'persist-all-cqu-mode', enabled })).ok;
-}
-
 async function sendSettingsMutationMessage(message: unknown): Promise<ReplaceSettingsResult> {
   try {
     const response = (await browser.runtime.sendMessage(message)) as unknown;
@@ -116,10 +139,13 @@ async function sendSettingsMutationMessage(message: unknown): Promise<ReplaceSet
       response.error.trim() &&
       (response.code === undefined ||
         response.code === 'settings-conflict' ||
+        response.code === 'settings-apply-failed' ||
         response.code === 'operation-failed')
     ) return {
       ok: false,
-      code: response.code === 'settings-conflict' ? 'settings-conflict' : 'operation-failed',
+      code: response.code === 'settings-conflict' || response.code === 'settings-apply-failed'
+        ? response.code
+        : 'operation-failed',
       error: response.error.trim(),
     };
     return { ok: false, code: 'operation-failed', error: 'Background operation failed' };
@@ -136,28 +162,27 @@ async function writeSettings(next: ExtensionSettings, revision: number): Promise
 }
 
 function queueSettingsWrite<T>(operation: () => Promise<T>): Promise<T> {
-  const current = settingsWriteQueue.then(operation, operation);
-  settingsWriteQueue = current.then(
-    () => undefined,
-    () => undefined,
-  );
-  return current;
+  return queueBackgroundOperation(operation);
 }
 
 export async function updateSettings(
   mutator: (current: ExtensionSettings) => ExtensionSettings | Promise<ExtensionSettings>,
+  hooks?: SettingsMutationHooks,
 ): Promise<ExtensionSettings> {
-  return (await updateSettingsSnapshot(mutator)).settings;
+  return (await updateSettingsSnapshot(mutator, hooks)).settings;
 }
 
 export async function updateSettingsSnapshot(
   mutator: (current: ExtensionSettings) => ExtensionSettings | Promise<ExtensionSettings>,
+  hooks?: SettingsMutationHooks,
 ): Promise<SettingsSnapshot> {
   return queueSettingsWrite(async () => {
     const snapshot = await loadSettingsSnapshot();
-    const next = structuredClone(await mutator(snapshot.settings));
+    const mutated = await mutator(snapshot.settings);
+    if (mutated === snapshot.settings) return structuredClone(snapshot);
+    const next = structuredClone(mutated);
     const revision = snapshot.revision + 1;
-    await writeSettings(next, revision);
+    await writeAndApplySettings(snapshot, next, revision, hooks);
     return { settings: structuredClone(next), revision };
   });
 }
@@ -169,6 +194,7 @@ export class SettingsRevisionConflict extends Error {
 export async function replaceSettingsAtRevision(
   editable: EditableSettings,
   expectedRevision: number,
+  hooks?: SettingsMutationHooks,
 ): Promise<SettingsSnapshot> {
   return queueSettingsWrite(async () => {
     const current = await loadSettingsSnapshot();
@@ -176,9 +202,42 @@ export async function replaceSettingsAtRevision(
     const validated = validateEditableSettings(editable);
     const settings = { ...validated, enableAllCquDomains: current.settings.enableAllCquDomains };
     const revision = current.revision + 1;
-    await writeSettings(settings, revision);
+    await writeAndApplySettings(current, settings, revision, hooks);
     return { settings: structuredClone(settings), revision };
   });
+}
+
+export class SettingsApplyFailed extends Error {
+  constructor(message: string, options?: ErrorOptions) {
+    super(message, options);
+    this.name = 'SettingsApplyFailed';
+  }
+}
+
+async function writeAndApplySettings(
+  previous: SettingsSnapshot,
+  next: ExtensionSettings,
+  revision: number,
+  hooks?: SettingsMutationHooks,
+): Promise<void> {
+  await writeSettings(next, revision);
+  if (!hooks) return;
+  try {
+    await hooks.apply(next);
+    await hooks.afterApply?.(next, previous.settings);
+  } catch (error) {
+    try {
+      await writeSettings(previous.settings, previous.revision);
+      await hooks.apply(previous.settings);
+    } catch (rollbackError) {
+      throw new SettingsApplyFailed(
+        'Settings application failed and rollback could not be completed',
+        { cause: new AggregateError([error, rollbackError]) },
+      );
+    }
+    const detail = error instanceof Error && error.message ? `: ${error.message}` : '';
+    throw new SettingsApplyFailed(`Settings application failed${detail}`, { cause: error });
+  }
 }
 
 export async function setAllCquMode(enabled: boolean): Promise<boolean> {
@@ -204,38 +263,35 @@ export async function setAllCquMode(enabled: boolean): Promise<boolean> {
       request.status === 'rejected' ||
       !request.value
     ) {
-      await persistAllCquModeViaBackground(false);
+      await reconcileAllCquModeViaBackground(false);
       return false;
     }
-    const newlyAcquired = !containment.value;
+    return reconcileAllCquModeViaBackground(true);
+  }
+  return reconcileAllCquModeViaBackground(false);
+}
 
-    if (await persistAllCquModeViaBackground(true)) return true;
-
-    if (newlyAcquired) {
-      try {
-        await browser.permissions.remove(CQU_OPTIONAL_ORIGINS);
-      } catch {
-        // Best-effort rollback; the false result below reports incomplete enablement.
-      }
-    }
-    await persistAllCquModeViaBackground(false);
+async function reconcileAllCquModeViaBackground(requested: boolean): Promise<boolean> {
+  try {
+    const response = await browser.runtime.sendMessage({
+      type: 'reconcile-all-cqu-mode',
+      requested,
+    }) as unknown;
+    return isPlainObject(response) &&
+      hasExactKeys(response, ['enabled', 'ok', 'revision']) &&
+      response.ok === true &&
+      typeof response.enabled === 'boolean' &&
+      isSafeRevision(response.revision) &&
+      response.enabled === requested;
+  } catch {
     return false;
   }
-
-  let removed = false;
-  try {
-    removed = await browser.permissions.remove(CQU_OPTIONAL_ORIGINS);
-  } catch {
-    // Persist the disabled mode even when Chromium cannot remove the grant.
-  }
-  const persisted = await persistAllCquModeViaBackground(false);
-  return removed && persisted;
 }
 
 export function validateExtensionSettings(value: unknown): ExtensionSettings {
   if (!isPlainObject(value) || !hasExactKeys(value, [
     'customRules',
-    'disabledBuiltInRuleIds',
+    'disabledRuleIds',
     'enableAllCquDomains',
     'enabled',
     'excludedHosts',
@@ -247,7 +303,7 @@ export function validateExtensionSettings(value: unknown): ExtensionSettings {
   }
   const editable = validateEditableSettings({
     enabled: value.enabled,
-    disabledBuiltInRuleIds: value.disabledBuiltInRuleIds,
+    disabledRuleIds: value.disabledRuleIds,
     customRules: value.customRules,
     excludedHosts: value.excludedHosts,
   });
@@ -270,11 +326,11 @@ export function validateSettingsSnapshot(value: unknown): SettingsSnapshot {
 
 export function validateEditableSettings(value: unknown): EditableSettings {
   if (!isPlainObject(value) || !hasExactKeys(value, [
-    'customRules', 'disabledBuiltInRuleIds', 'enabled', 'excludedHosts',
+    'customRules', 'disabledRuleIds', 'enabled', 'excludedHosts',
   ])) throw new Error('Editable settings payload has an invalid shape');
   if (typeof value.enabled !== 'boolean') throw new Error('Settings switches must be booleans');
-  const disabledBuiltInRuleIds = parseStringArray(
-    value.disabledBuiltInRuleIds,
+  const disabledRuleIds = parseStringArray(
+    value.disabledRuleIds,
     'disabled rule IDs',
   );
   const excludedHosts = parseStringArray(value.excludedHosts, 'excluded hosts')
@@ -312,7 +368,7 @@ export function validateEditableSettings(value: unknown): EditableSettings {
   }
   return {
     enabled: value.enabled,
-    disabledBuiltInRuleIds: [...new Set(disabledBuiltInRuleIds.map((id) => id.trim()))].sort(),
+    disabledRuleIds: [...new Set(disabledRuleIds.map((id) => id.trim()))].sort(),
     customRules,
     excludedHosts: normalizedExcludedHosts,
   };

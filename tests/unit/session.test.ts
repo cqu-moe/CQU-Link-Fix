@@ -1071,7 +1071,7 @@ describe('background session lifecycle, errors, and messages', () => {
       type: 'replace-settings',
       settings: {
         enabled: true,
-        disabledBuiltInRuleIds: [],
+        disabledRuleIds: [],
         customRules,
         excludedHosts,
       },
@@ -1108,7 +1108,7 @@ describe('background session lifecycle, errors, and messages', () => {
         'https://library-cqu-edu-cn-s.atrust.cqu.edu.cn/*',
       ],
     },
-    { type: 'release-custom-permission-lease', nonce: 'forged' },
+    { type: 'release-custom-permission-lease', nonce: 'forged', cleanupOrigins: [] },
   ])('rejects malformed custom permission lease message before dispatch: %#', async (message) => {
     await startBackground();
 
@@ -1166,9 +1166,9 @@ describe('background session lifecycle, errors, and messages', () => {
     await expect(fakeBrowser.runtime.onMessage.trigger({
       type: 'release-custom-permission-lease',
       nonce: acquired.leaseNonce,
+      cleanupOrigins: [],
     }, { id: browser.runtime.id })).resolves.toEqual([{
       ok: true,
-      requiredOrigins: [],
     }]);
   });
 
@@ -1198,7 +1198,7 @@ describe('background session lifecycle, errors, and messages', () => {
     };
     const replacement = {
       enabled: DEFAULT_SETTINGS.enabled,
-      disabledBuiltInRuleIds: DEFAULT_SETTINGS.disabledBuiltInRuleIds,
+      disabledRuleIds: DEFAULT_SETTINGS.disabledRuleIds,
       customRules: [customRule],
       excludedHosts: ['first.cqu.edu.cn'],
     };
@@ -1215,15 +1215,20 @@ describe('background session lifecycle, errors, and messages', () => {
     );
     await vi.waitFor(() => expect(browser.tabs.get).toHaveBeenCalledWith(7));
     await new Promise((resolve) => setTimeout(resolve, 0));
+    vi.spyOn(browser.permissions, 'contains').mockResolvedValue(true as never);
     const settingMode = fakeBrowser.runtime.onMessage.trigger(
-      { type: 'persist-all-cqu-mode', enabled: true },
+      { type: 'reconcile-all-cqu-mode', requested: true },
       sender,
     );
     releaseReplacement.resolve();
 
     await expect(replacing).resolves.toEqual([{ ok: true, revision: expectedRevision + 1 }]);
     await expect(excluding).resolves.toEqual([{ ok: true }]);
-    await expect(settingMode).resolves.toEqual([{ ok: true, revision: expectedRevision + 3 }]);
+    await expect(settingMode).resolves.toEqual([{
+      ok: true,
+      revision: expectedRevision + 3,
+      enabled: true,
+    }]);
     expect(await loadSettings()).toEqual({
       ...replacement,
       enableAllCquDomains: true,
@@ -1240,7 +1245,7 @@ describe('background session lifecycle, errors, and messages', () => {
     ))[0] as unknown as { ok: true; snapshot: { revision: number } };
     const editable = {
       enabled: false,
-      disabledBuiltInRuleIds: [],
+      disabledRuleIds: [],
       customRules: [],
       excludedHosts: ['first.cqu.edu.cn'],
     };
@@ -1261,14 +1266,19 @@ describe('background session lifecycle, errors, and messages', () => {
     await startBackground();
     const sender = { id: browser.runtime.id };
 
+    vi.spyOn(browser.permissions, 'contains').mockResolvedValue(true as never);
     await expect(fakeBrowser.runtime.onMessage.trigger(
-      { type: 'persist-all-cqu-mode', enabled: true }, sender,
-    )).resolves.toEqual([{ ok: true, revision: expectedRevision + 1 }]);
+      { type: 'reconcile-all-cqu-mode', requested: true }, sender,
+    )).resolves.toEqual([{
+      ok: true,
+      revision: expectedRevision + 1,
+      enabled: true,
+    }]);
     await expect(fakeBrowser.runtime.onMessage.trigger({
       type: 'replace-settings',
       expectedRevision,
       settings: {
-        enabled: false, disabledBuiltInRuleIds: [], customRules: [], excludedHosts: [],
+        enabled: false, disabledRuleIds: [], customRules: [], excludedHosts: [],
       },
     }, sender)).resolves.toEqual([{
       ok: false, code: 'settings-conflict', error: expect.any(String),
@@ -1288,7 +1298,7 @@ describe('background session lifecycle, errors, and messages', () => {
     await expect(
       fakeBrowser.runtime.onMessage.trigger(
         { type: 'replace-settings', settings: {
-          enabled: false, disabledBuiltInRuleIds: [], customRules: [], excludedHosts: [],
+          enabled: false, disabledRuleIds: [], customRules: [], excludedHosts: [],
         }, expectedRevision: 1 },
         { id: 'untrusted-extension' },
       ),
@@ -1296,6 +1306,108 @@ describe('background session lifecycle, errors, and messages', () => {
 
     expect(storageSet).not.toHaveBeenCalled();
     expect(await loadSettings()).toEqual(DEFAULT_SETTINGS);
+  });
+
+  it('derives concurrent all-CQU operations from the final wildcard grant state', async () => {
+    await saveSettings({ ...DEFAULT_SETTINGS, enableAllCquDomains: true });
+    await startBackground();
+    let granted = true;
+    const removal = deferred<void>();
+    vi.spyOn(browser.permissions, 'remove').mockImplementation(async () => {
+      await removal.promise;
+      granted = false;
+      return true;
+    });
+    vi.spyOn(browser.permissions, 'contains').mockImplementation(async () => granted);
+    const sender = { id: browser.runtime.id };
+
+    const disabling = fakeBrowser.runtime.onMessage.trigger(
+      { type: 'reconcile-all-cqu-mode', requested: false },
+      sender,
+    );
+    await vi.waitFor(() => expect(browser.permissions.remove).toHaveBeenCalled());
+    const staleEnabling = fakeBrowser.runtime.onMessage.trigger(
+      { type: 'reconcile-all-cqu-mode', requested: true },
+      sender,
+    );
+    removal.resolve();
+
+    await disabling;
+    await expect(staleEnabling).resolves.toEqual([{
+      ok: true,
+      revision: 2,
+      enabled: false,
+    }]);
+    expect((await loadSettings()).enableAllCquDomains).toBe(false);
+  });
+
+  it('revokes deleted custom-rule origins before acknowledging the settings mutation', async () => {
+    const customRule = {
+      id: 'deleted-rule', dnrId: 10_001, name: 'library.cqu.edu.cn', description: 'custom',
+      category: 'custom' as const, defaultEnabled: true,
+      matcher: { kind: 'host' as const, host: 'library.cqu.edu.cn' },
+      transformer: 'atrust-domain' as const,
+    };
+    await saveSettings({ ...DEFAULT_SETTINGS, customRules: [customRule] });
+    await startBackground();
+    const removal = deferred<boolean>();
+    vi.spyOn(browser.permissions, 'remove').mockReturnValue(removal.promise as never);
+    let settled = false;
+
+    const response = fakeBrowser.runtime.onMessage.trigger({
+      type: 'replace-settings',
+      expectedRevision: 1,
+      settings: {
+        enabled: true,
+        disabledRuleIds: [],
+        customRules: [],
+        excludedHosts: [],
+      },
+    }, { id: browser.runtime.id }).then((value) => {
+      settled = true;
+      return value;
+    });
+    await vi.waitFor(() => expect(browser.permissions.remove).toHaveBeenCalledWith({
+      origins: [
+        '*://library.cqu.edu.cn/*',
+        'https://library-cqu-edu-cn-s.atrust.cqu.edu.cn/*',
+      ],
+    }));
+    expect(settled).toBe(false);
+
+    removal.resolve(true);
+    await expect(response).resolves.toEqual([{ ok: true, revision: 2 }]);
+  });
+
+  it('does not revoke deleted custom-rule origins while an active lease owns them', async () => {
+    const customRule = {
+      id: 'leased-rule', dnrId: 10_001, name: 'library.cqu.edu.cn', description: 'custom',
+      category: 'custom' as const, defaultEnabled: true,
+      matcher: { kind: 'host' as const, host: 'library.cqu.edu.cn' },
+      transformer: 'atrust-domain' as const,
+    };
+    await saveSettings({ ...DEFAULT_SETTINGS, customRules: [customRule] });
+    await startBackground();
+    await fakeBrowser.runtime.onMessage.trigger({
+      type: 'acquire-custom-permission-lease',
+      origins: [
+        '*://library.cqu.edu.cn/*',
+        'https://library-cqu-edu-cn-s.atrust.cqu.edu.cn/*',
+      ],
+    }, { id: browser.runtime.id });
+    const remove = vi.spyOn(browser.permissions, 'remove').mockResolvedValue(true as never);
+
+    await expect(fakeBrowser.runtime.onMessage.trigger({
+      type: 'replace-settings',
+      expectedRevision: 1,
+      settings: {
+        enabled: true,
+        disabledRuleIds: [],
+        customRules: [],
+        excludedHosts: [],
+      },
+    }, { id: browser.runtime.id })).resolves.toEqual([{ ok: true, revision: 2 }]);
+    expect(remove).not.toHaveBeenCalled();
   });
 });
 
@@ -1307,7 +1419,9 @@ describe('exclude current host', () => {
       ...DEFAULT_SETTINGS,
       excludedHosts: ['  SSO.CQU.EDU.CN ', 'sso.cqu.edu.cn', 'Other.CQU.EDU.CN'],
     });
-    await recordRewrite(rewriteRecord());
+    const record = rewriteRecord();
+    await recordRewrite(record);
+    mockGetTab().mockResolvedValue(tab(record.targetUrl));
 
     await excludeCurrentHost(7);
 
@@ -1317,6 +1431,27 @@ describe('exclude current host', () => {
     ]);
   });
 
+  it('uses the verified current tab host when a rewrite record is stale', async () => {
+    await saveSettings(DEFAULT_SETTINGS);
+    await recordRewrite(rewriteRecord());
+    mockGetTab().mockResolvedValue(tab('https://library.cqu.edu.cn/current'));
+
+    await excludeCurrentHost(7);
+
+    expect((await loadSettings()).excludedHosts).toEqual(['library.cqu.edu.cn']);
+  });
+
+  it('uses the original source host when the current tab is the recorded rewrite target', async () => {
+    await saveSettings(DEFAULT_SETTINGS);
+    const record = rewriteRecord();
+    await recordRewrite(record);
+    mockGetTab().mockResolvedValue(tab(record.targetUrl));
+
+    await excludeCurrentHost(7);
+
+    expect((await loadSettings()).excludedHosts).toEqual(['sso.cqu.edu.cn']);
+  });
+
   it('reloads the latest settings immediately before saving after a delayed tab lookup', async () => {
     const pendingTab = deferred<Browser.tabs.Tab>();
     mockGetTab().mockReturnValue(pendingTab.promise);
@@ -1324,7 +1459,7 @@ describe('exclude current host', () => {
     await vi.waitFor(() => expect(browser.tabs.get).toHaveBeenCalledWith(7));
     await saveSettings({
       ...DEFAULT_SETTINGS,
-      disabledBuiltInRuleIds: ['core-sso'],
+      disabledRuleIds: ['core-sso'],
       excludedHosts: ['existing.cqu.edu.cn'],
     });
     pendingTab.resolve(tab('https://Library.CQU.EDU.CN/path'));
@@ -1332,7 +1467,7 @@ describe('exclude current host', () => {
     await excluding;
 
     expect(await loadSettings()).toMatchObject({
-      disabledBuiltInRuleIds: ['core-sso'],
+      disabledRuleIds: ['core-sso'],
       excludedHosts: ['existing.cqu.edu.cn', 'library.cqu.edu.cn'],
     });
   });

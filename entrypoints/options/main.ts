@@ -29,7 +29,6 @@ function startOptions(): void {
     setAllCquMode,
     containsPermission: (permission) => browser.permissions.contains(permission),
     requestPermission: (permission) => browser.permissions.request(permission),
-    removePermission: (permission) => browser.permissions.remove(permission),
     acquirePermissionLease: acquireCustomPermissionLeaseViaBackground,
     renewPermissionLease: renewCustomPermissionLeaseViaBackground,
     releasePermissionLease: releaseCustomPermissionLeaseViaBackground,

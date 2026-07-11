@@ -1,5 +1,5 @@
 import type { Browser } from 'wxt/browser';
-import { loadSettings } from '../storage/settings';
+import { loadSettings, type ExtensionSettings } from '../storage/settings';
 import { getEnabledRules } from './registry';
 import type { RuleDefinition } from './types';
 
@@ -203,8 +203,10 @@ export function compileDynamicRules(
   return compiled;
 }
 
-export async function reconcileDynamicRules(): Promise<void> {
-  const settings = await loadSettings();
+export async function reconcileDynamicRules(
+  settingsInput?: ExtensionSettings,
+): Promise<void> {
+  const settings = settingsInput ?? await loadSettings();
   const next = compileDynamicRules(getEnabledRules(settings), settings.excludedHosts);
 
   for (const rule of next) {

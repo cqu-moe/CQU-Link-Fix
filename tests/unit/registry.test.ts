@@ -22,7 +22,7 @@ describe('rule registry', () => {
     expect(getEnabledRules({
       ...DEFAULT_SETTINGS,
       customRules: [custom],
-      disabledBuiltInRuleIds: [custom.id],
+      disabledRuleIds: [custom.id],
     })).not.toContainEqual(custom);
   });
   it('ships stable default built-ins', () => {
@@ -61,7 +61,7 @@ describe('rule registry', () => {
   });
 
   it('honors a disabled built-in', () => {
-    const settings = { ...DEFAULT_SETTINGS, disabledBuiltInRuleIds: ['core-sso'] };
+    const settings = { ...DEFAULT_SETTINGS, disabledRuleIds: ['core-sso'] };
     expect(getEnabledRules(settings).map((rule) => rule.id)).toEqual(['addon-youth-public']);
   });
 
@@ -78,7 +78,7 @@ describe('rule registry', () => {
       getEnabledRules({
         ...DEFAULT_SETTINGS,
         customRules: [customRule],
-        disabledBuiltInRuleIds: ['custom-ip'],
+        disabledRuleIds: ['custom-ip'],
       }).map((rule) => rule.id),
     ).toEqual(['core-sso', 'addon-youth-public']);
   });

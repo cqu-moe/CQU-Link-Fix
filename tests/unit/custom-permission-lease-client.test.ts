@@ -27,15 +27,16 @@ describe('custom permission lease client', () => {
     const send = mockSendMessage()
       .mockResolvedValueOnce({ ok: true, leaseNonce: NONCE })
       .mockResolvedValueOnce({ ok: true, leaseExpiresAt: 123_000 })
-      .mockResolvedValueOnce({ ok: true, requiredOrigins: [...PERMISSION.origins].reverse() });
+      .mockResolvedValueOnce({ ok: true });
 
     await expect(acquireCustomPermissionLeaseViaBackground(PERMISSION)).resolves.toEqual({
       nonce: NONCE,
     });
     await expect(renewCustomPermissionLeaseViaBackground(NONCE, PERMISSION)).resolves.toBe(true);
-    await expect(releaseCustomPermissionLeaseViaBackground(NONCE)).resolves.toEqual({
-      requiredOrigins: [...PERMISSION.origins].sort(),
-    });
+    await expect(releaseCustomPermissionLeaseViaBackground(
+      NONCE,
+      PERMISSION.origins,
+    )).resolves.toBe(true);
     expect(send).toHaveBeenNthCalledWith(1, {
       type: 'acquire-custom-permission-lease',
       origins: PERMISSION.origins,
@@ -48,6 +49,7 @@ describe('custom permission lease client', () => {
     expect(send).toHaveBeenNthCalledWith(3, {
       type: 'release-custom-permission-lease',
       nonce: NONCE,
+      cleanupOrigins: [...PERMISSION.origins].sort(),
     });
   });
 
@@ -74,12 +76,13 @@ describe('custom permission lease client', () => {
   });
 
   it.each([
-    { ok: true },
+    undefined,
+    { ok: true, extra: true },
     { ok: true, requiredOrigins: ['*://*.cqu.edu.cn/*'] },
-    { ok: true, requiredOrigins: 'not-an-array' },
+    { ok: false, error: 'failed' },
   ])('fails closed on malformed release response %#', async (response) => {
     mockSendMessage().mockResolvedValue(response);
 
-    await expect(releaseCustomPermissionLeaseViaBackground(NONCE)).resolves.toBeNull();
+    await expect(releaseCustomPermissionLeaseViaBackground(NONCE)).resolves.toBe(false);
   });
 });

@@ -11,6 +11,7 @@ import {
   setAllCquMode,
   updateSettings,
   validateEditableSettings,
+  validateExtensionSettings,
 } from '../../src/storage/settings';
 import type { CustomRule } from '../../src/rules/types';
 
@@ -74,13 +75,13 @@ describe('settings storage', () => {
   beforeEach(() => {
     fakeBrowser.reset();
     mockSendMessage().mockImplementation(async (message) => {
-      const candidate = message as { type?: string; enabled?: boolean };
-      if (candidate.type === 'persist-all-cqu-mode' && typeof candidate.enabled === 'boolean') {
+      const candidate = message as { type?: string; requested?: boolean };
+      if (candidate.type === 'reconcile-all-cqu-mode' && typeof candidate.requested === 'boolean') {
         await updateSettings((current) => ({
           ...current,
-          enableAllCquDomains: candidate.enabled!,
+          enableAllCquDomains: candidate.requested!,
         }));
-        return { ok: true, revision: 1 };
+        return { ok: true, enabled: candidate.requested, revision: 1 };
       }
       return { ok: false, error: 'Unexpected test message' };
     });
@@ -96,6 +97,23 @@ describe('settings storage', () => {
     expect(await loadSettings()).toEqual(DEFAULT_SETTINGS);
   });
 
+  it('accepts only the truthful disabledRuleIds schema field', () => {
+    expect(validateExtensionSettings({
+      enabled: true,
+      enableAllCquDomains: false,
+      disabledRuleIds: [],
+      customRules: [],
+      excludedHosts: [],
+    } as never)).toMatchObject({ disabledRuleIds: [] });
+    expect(() => validateExtensionSettings({
+      enabled: true,
+      enableAllCquDomains: false,
+      disabledBuiltInRuleIds: [],
+      customRules: [],
+      excludedHosts: [],
+    })).toThrow();
+  });
+
   it('merges stored partial settings with new defaults', async () => {
     await browser.storage.local.set({ settings: { enableAllCquDomains: true } });
 
@@ -105,32 +123,46 @@ describe('settings storage', () => {
     });
   });
 
+  it('fails safely to defaults when storage contains the retired field name', async () => {
+    await browser.storage.local.set({
+      settings: {
+        enabled: false,
+        enableAllCquDomains: true,
+        disabledBuiltInRuleIds: ['core-sso'],
+        customRules: [],
+        excludedHosts: ['library.cqu.edu.cn'],
+      },
+    });
+
+    expect(await loadSettings()).toEqual(DEFAULT_SETTINGS);
+  });
+
   it('does not expose mutable arrays from the default settings singleton', async () => {
     const loaded = await loadSettings();
-    loaded.disabledBuiltInRuleIds.push('core-sso');
+    loaded.disabledRuleIds.push('core-sso');
     loaded.excludedHosts.push('example.cqu.edu.cn');
 
-    expect(DEFAULT_SETTINGS.disabledBuiltInRuleIds).toEqual([]);
+    expect(DEFAULT_SETTINGS.disabledRuleIds).toEqual([]);
     expect(DEFAULT_SETTINGS.excludedHosts).toEqual([]);
   });
 
   it('does not alias stored custom rule matchers across loads', async () => {
     const customRule: CustomRule = {
-      id: 'custom-ip',
-      dnrId: 3001,
-      name: 'Registered IP service',
-      description: 'Test-only registered IP and port pair',
+      id: 'custom-library',
+      dnrId: 10_001,
+      name: 'Library',
+      description: 'Test-only exact host',
       category: 'custom',
       defaultEnabled: true,
-      matcher: { kind: 'host-port', host: '1.1.1.1', port: 8000 },
-      transformer: 'atrust-ip-port',
+      matcher: { kind: 'host', host: 'library.cqu.edu.cn' },
+      transformer: 'atrust-domain',
     };
     await saveSettings({ ...DEFAULT_SETTINGS, customRules: [customRule] });
 
     const firstLoad = await loadSettings();
     firstLoad.customRules[0]!.matcher.host = 'mutated.example';
 
-    expect((await loadSettings()).customRules[0]!.matcher.host).toBe('1.1.1.1');
+    expect((await loadSettings()).customRules[0]!.matcher.host).toBe('library.cqu.edu.cn');
   });
 
   it('exposes a Task 8 client seam that requests complete background replacement', async () => {
@@ -209,12 +241,12 @@ describe('settings storage', () => {
   it('normalizes replaceable arrays and rejects unsafe or colliding custom rules', () => {
     const base = {
       enabled: true,
-      disabledBuiltInRuleIds: [' core-sso ', 'core-sso'],
+      disabledRuleIds: [' core-sso ', 'core-sso'],
       excludedHosts: [' B.CQU.EDU.CN ', 'b.cqu.edu.cn'],
       customRules: [createCustomRule()],
     };
     expect(validateEditableSettings(base)).toMatchObject({
-      disabledBuiltInRuleIds: ['core-sso'], excludedHosts: ['b.cqu.edu.cn'],
+      disabledRuleIds: ['core-sso'], excludedHosts: ['b.cqu.edu.cn'],
     });
     expect(() => validateEditableSettings({
       ...base, customRules: [{ ...createCustomRule(), id: 'core-sso' }],
@@ -249,7 +281,7 @@ describe('settings storage', () => {
   it.each([10_000, 80_000])('rejects custom DNR ID outside the UI allocation range: %s', (dnrId) => {
     expect(() => validateEditableSettings({
       enabled: true,
-      disabledBuiltInRuleIds: [],
+      disabledRuleIds: [],
       excludedHosts: [],
       customRules: [{ ...createCustomRule(), dnrId }],
     })).toThrow(/DNR/i);
@@ -258,7 +290,7 @@ describe('settings storage', () => {
   it('rejects a custom source that duplicates a built-in host', () => {
     expect(() => validateEditableSettings({
       enabled: true,
-      disabledBuiltInRuleIds: [],
+      disabledRuleIds: [],
       excludedHosts: [],
       customRules: [{
         ...createCustomRule(),
@@ -271,7 +303,7 @@ describe('settings storage', () => {
   it('rejects duplicate canonical custom source hosts', () => {
     expect(() => validateEditableSettings({
       enabled: true,
-      disabledBuiltInRuleIds: [],
+      disabledRuleIds: [],
       excludedHosts: [],
       customRules: [
         { ...createCustomRule(), dnrId: 10_001 },
@@ -371,10 +403,24 @@ describe('settings storage', () => {
 
     expect(request).toHaveBeenCalledWith(CQU_OPTIONAL_ORIGINS);
     expect(browser.runtime.sendMessage).toHaveBeenCalledWith({
-      type: 'persist-all-cqu-mode',
-      enabled: true,
+      type: 'reconcile-all-cqu-mode',
+      requested: true,
     });
     expect((await loadSettings()).enableAllCquDomains).toBe(true);
+  });
+
+  it('accepts the background-reconciled actual wildcard state instead of persisting a stale enable', async () => {
+    mockPermissionContains().mockResolvedValue(false);
+    mockPermissionRequest().mockResolvedValue(true);
+    mockSendMessage().mockResolvedValue({ ok: true, enabled: false, revision: 1 });
+
+    await expect(setAllCquMode(true)).resolves.toBe(false);
+
+    expect(browser.permissions.request).toHaveBeenCalledWith(CQU_OPTIONAL_ORIGINS);
+    expect(browser.runtime.sendMessage).toHaveBeenCalledWith({
+      type: 'reconcile-all-cqu-mode',
+      requested: true,
+    });
   });
 
   it('keeps settings disabled when the optional permission request is denied', async () => {
@@ -386,8 +432,8 @@ describe('settings storage', () => {
     await expect(setAllCquMode(true)).resolves.toBe(false);
 
     expect(browser.runtime.sendMessage).toHaveBeenCalledWith({
-      type: 'persist-all-cqu-mode',
-      enabled: false,
+      type: 'reconcile-all-cqu-mode',
+      requested: false,
     });
     expect((await loadSettings()).enableAllCquDomains).toBe(false);
     expect(storageSet).toHaveBeenCalled();
@@ -401,17 +447,17 @@ describe('settings storage', () => {
 
     await expect(setAllCquMode(true)).resolves.toBe(false);
 
-    expect(remove).toHaveBeenCalledWith(CQU_OPTIONAL_ORIGINS);
+    expect(remove).not.toHaveBeenCalled();
     expect(browser.runtime.sendMessage).toHaveBeenCalledWith({
-      type: 'persist-all-cqu-mode',
-      enabled: true,
+      type: 'reconcile-all-cqu-mode',
+      requested: true,
     });
   });
 
   it('does not write local storage in the permission-caller context', async () => {
     mockPermissionContains().mockResolvedValue(true);
     mockPermissionRequest().mockResolvedValue(true);
-    mockSendMessage().mockResolvedValue({ ok: true, revision: 1 });
+    mockSendMessage().mockResolvedValue({ ok: true, enabled: true, revision: 1 });
     const storageSet = vi.spyOn(browser.storage.local, 'set');
 
     await expect(setAllCquMode(true)).resolves.toBe(true);
@@ -464,28 +510,15 @@ describe('settings storage', () => {
     });
   });
 
-  it('rolls back only a newly acquired grant when enabling storage fails', async () => {
+  it('retains a newly acquired grant when background reconciliation fails', async () => {
     mockPermissionContains().mockResolvedValue(false);
     mockPermissionRequest().mockResolvedValue(true);
     const remove = mockPermissionRemove().mockRejectedValue(new Error('rollback unavailable'));
-    const originalSet = browser.storage.local.set.bind(browser.storage.local) as StorageSet;
-    mockStorageSet()
-      .mockRejectedValueOnce(new Error('storage unavailable'))
-      .mockImplementation(originalSet);
-
-    await expect(setAllCquMode(true)).resolves.toBe(false);
-
-    expect(remove).toHaveBeenCalledWith(CQU_OPTIONAL_ORIGINS);
-    expect((await loadSettings()).enableAllCquDomains).toBe(false);
-  });
-
-  it('does not remove an existing grant when enabling storage fails', async () => {
-    mockPermissionContains().mockResolvedValue(true);
-    const remove = mockPermissionRemove();
-    const originalSet = browser.storage.local.set.bind(browser.storage.local) as StorageSet;
-    mockStorageSet()
-      .mockRejectedValueOnce(new Error('storage unavailable'))
-      .mockImplementation(originalSet);
+    mockSendMessage().mockResolvedValue({
+      ok: false,
+      code: 'settings-apply-failed',
+      error: 'DNR unavailable',
+    });
 
     await expect(setAllCquMode(true)).resolves.toBe(false);
 
@@ -493,53 +526,38 @@ describe('settings storage', () => {
     expect((await loadSettings()).enableAllCquDomains).toBe(false);
   });
 
-  it('disables through settings and removes exactly the optional origins', async () => {
+  it('does not remove an existing grant when background reconciliation fails', async () => {
+    mockPermissionContains().mockResolvedValue(true);
+    const remove = mockPermissionRemove();
+    mockSendMessage().mockResolvedValue({
+      ok: false,
+      code: 'settings-apply-failed',
+      error: 'DNR unavailable',
+    });
+
+    await expect(setAllCquMode(true)).resolves.toBe(false);
+
+    expect(remove).not.toHaveBeenCalled();
+    expect((await loadSettings()).enableAllCquDomains).toBe(false);
+  });
+
+  it('delegates disable and permission removal to the background', async () => {
     await saveSettings({ ...DEFAULT_SETTINGS, enableAllCquDomains: true });
     const remove = mockPermissionRemove().mockResolvedValue(true);
 
     await expect(setAllCquMode(false)).resolves.toBe(true);
 
-    expect(remove).toHaveBeenCalledWith(CQU_OPTIONAL_ORIGINS);
+    expect(remove).not.toHaveBeenCalled();
+    expect(browser.runtime.sendMessage).toHaveBeenCalledWith({
+      type: 'reconcile-all-cqu-mode',
+      requested: false,
+    });
     expect((await loadSettings()).enableAllCquDomains).toBe(false);
   });
 
-  it.each([
-    { label: 'returns false', remove: () => Promise.resolve(false) },
-    { label: 'rejects', remove: () => Promise.reject(new Error('permission API unavailable')) },
-  ])(
-    'keeps settings disabled and reports failure when permission removal $label',
-    async ({ remove }) => {
-      await saveSettings({ ...DEFAULT_SETTINGS, enableAllCquDomains: true });
-      mockPermissionRemove().mockImplementation(remove);
+  it('reports disable failure when the background says the wildcard grant remains', async () => {
+    mockSendMessage().mockResolvedValue({ ok: true, enabled: true, revision: 2 });
 
-      await expect(setAllCquMode(false)).resolves.toBe(false);
-
-      expect((await loadSettings()).enableAllCquDomains).toBe(false);
-    },
-  );
-
-  it('reloads concurrent settings after a failed permission removal before disabling', async () => {
-    await saveSettings({ ...DEFAULT_SETTINGS, enableAllCquDomains: true });
-    const permissionRemoval = deferred<boolean>();
-    mockPermissionRemove().mockReturnValue(permissionRemoval.promise);
-    const disabling = setAllCquMode(false);
-    await vi.waitFor(() => expect(browser.permissions.remove).toHaveBeenCalled());
-
-    const concurrentRule = createCustomRule();
-    await saveSettings({
-      ...DEFAULT_SETTINGS,
-      enableAllCquDomains: true,
-      excludedHosts: ['concurrent.cqu.edu.cn'],
-      customRules: [concurrentRule],
-    });
-    permissionRemoval.resolve(false);
-
-    await expect(disabling).resolves.toBe(false);
-    expect(await loadSettings()).toEqual({
-      ...DEFAULT_SETTINGS,
-      enableAllCquDomains: false,
-      excludedHosts: ['concurrent.cqu.edu.cn'],
-      customRules: [concurrentRule],
-    });
+    await expect(setAllCquMode(false)).resolves.toBe(false);
   });
 });

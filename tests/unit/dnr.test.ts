@@ -432,7 +432,7 @@ describe('DNR reconciliation', () => {
 describe('background reconciliation hooks', () => {
   beforeEach(() => fakeBrowser.reset());
 
-  it('runs at startup, install, and local settings changes only', async () => {
+  it('runs at startup and install without redundant storage-change reconciliation', async () => {
     const isRegexSupported = mockRegexSupport().mockResolvedValue({ isSupported: true });
     mockGetDynamicRules().mockResolvedValue([]);
     const updateDynamicRules = mockUpdateDynamicRules().mockResolvedValue();
@@ -452,7 +452,8 @@ describe('background reconciliation hooks', () => {
     expect(updateDynamicRules).toHaveBeenCalledTimes(2);
 
     await fakeBrowser.storage.onChanged.trigger({ settings: { newValue: {} } }, 'local');
-    await vi.waitFor(() => expect(updateDynamicRules).toHaveBeenCalledTimes(3));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(updateDynamicRules).toHaveBeenCalledTimes(2);
     expect(isRegexSupported).toHaveBeenCalled();
   });
 
@@ -471,8 +472,93 @@ describe('background reconciliation hooks', () => {
 
     await expect(
       fakeBrowser.storage.onChanged.trigger({ settings: { newValue: {} } }, 'local'),
-    ).resolves.toEqual([undefined]);
-    await vi.waitFor(() => expect(consoleError).toHaveBeenCalledTimes(3));
+    ).resolves.toEqual([]);
+    expect(consoleError).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not acknowledge a settings mutation until its DNR reconciliation succeeds', async () => {
+    await saveSettings(DEFAULT_SETTINGS);
+    mockRegexSupport().mockResolvedValue({ isSupported: true });
+    mockGetDynamicRules().mockResolvedValue([]);
+    const reconciliation = deferred<void>();
+    const updateDynamicRules = mockUpdateDynamicRules()
+      .mockResolvedValueOnce()
+      .mockReturnValueOnce(reconciliation.promise);
+    background.main!();
+    await vi.waitFor(() => expect(updateDynamicRules).toHaveBeenCalledOnce());
+
+    let settled = false;
+    const response = fakeBrowser.runtime.onMessage.trigger({
+      type: 'replace-settings',
+      expectedRevision: 1,
+      settings: {
+        enabled: false,
+        disabledRuleIds: [],
+        customRules: [],
+        excludedHosts: [],
+      },
+    }, { id: browser.runtime.id }).then((value) => {
+      settled = true;
+      return value;
+    });
+    await vi.waitFor(() => expect(updateDynamicRules).toHaveBeenCalledTimes(2));
+    expect(settled).toBe(false);
+
+    reconciliation.resolve();
+    await reconciliation.promise;
+    await expect(response).resolves.toEqual([{ ok: true, revision: 2 }]);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+
+  it('rolls settings back and returns an actionable failure when DNR reconciliation fails', async () => {
+    await saveSettings(DEFAULT_SETTINGS);
+    mockRegexSupport().mockResolvedValue({ isSupported: true });
+    mockGetDynamicRules().mockResolvedValue([]);
+    const updateDynamicRules = mockUpdateDynamicRules()
+      .mockResolvedValueOnce()
+      .mockRejectedValueOnce(new Error('DNR unavailable'))
+      .mockResolvedValueOnce();
+    background.main!();
+    await vi.waitFor(() => expect(updateDynamicRules).toHaveBeenCalledOnce());
+
+    await expect(fakeBrowser.runtime.onMessage.trigger({
+      type: 'replace-settings',
+      expectedRevision: 1,
+      settings: {
+        enabled: false,
+        disabledRuleIds: [],
+        customRules: [],
+        excludedHosts: [],
+      },
+    }, { id: browser.runtime.id })).resolves.toEqual([{
+      ok: false,
+      code: 'settings-apply-failed',
+      error: expect.stringContaining('DNR'),
+    }]);
+    expect(await browser.storage.local.get()).toMatchObject({
+      settings: DEFAULT_SETTINGS,
+      settingsRevision: 1,
+    });
+  });
+
+  it('manually completes a built-in rewrite that starts before fresh-worker DNR readiness', async () => {
+    await saveSettings(DEFAULT_SETTINGS);
+    mockRegexSupport().mockResolvedValue({ isSupported: true });
+    mockGetDynamicRules().mockResolvedValue([]);
+    const startup = deferred<void>();
+    mockUpdateDynamicRules().mockReturnValueOnce(startup.promise);
+    const updateTab = mockUpdateTab().mockResolvedValue(undefined);
+    background.main!();
+
+    await fakeBrowser.webNavigation.onBeforeNavigate.trigger(
+      navigationDetails('https://sso.cqu.edu.cn/login'),
+    );
+    expect(updateTab).not.toHaveBeenCalled();
+    startup.resolve();
+
+    await vi.waitFor(() => expect(updateTab).toHaveBeenCalledWith(7, {
+      url: 'https://sso-cqu-edu-cn-s.atrust.cqu.edu.cn/login',
+    }));
   });
 });
 
@@ -549,7 +635,7 @@ describe('queried Youth navigation routing', () => {
     await saveSettings({
       ...DEFAULT_SETTINGS,
       customRules: [createCustomYouthArticleRule(), createYouthHostRule()],
-      disabledBuiltInRuleIds: ['addon-youth-public'],
+      disabledRuleIds: ['addon-youth-public'],
     });
     const updateTab = mockUpdateTab().mockResolvedValue(undefined);
     await startBackgroundWithDnrMocks();
@@ -567,7 +653,7 @@ describe('queried Youth navigation routing', () => {
     await saveSettings({
       ...DEFAULT_SETTINGS,
       customRules: [youth, host],
-      disabledBuiltInRuleIds: ['addon-youth-public'],
+      disabledRuleIds: ['addon-youth-public'],
     });
     const compiled = compileDynamicRules([youth, host], []);
     const compiledWinner = compiled
@@ -592,7 +678,7 @@ describe('queried Youth navigation routing', () => {
     await saveSettings({
       ...DEFAULT_SETTINGS,
       customRules: [customRule],
-      disabledBuiltInRuleIds: [customRule.id],
+      disabledRuleIds: [customRule.id],
     });
     const updateTab = mockUpdateTab().mockResolvedValue(undefined);
     await startBackgroundWithDnrMocks();
@@ -695,7 +781,7 @@ describe('queried Youth navigation routing', () => {
       label: 'excluded host',
     },
     {
-      settings: { ...DEFAULT_SETTINGS, disabledBuiltInRuleIds: ['addon-youth-public'] },
+      settings: { ...DEFAULT_SETTINGS, disabledRuleIds: ['addon-youth-public'] },
       label: 'disabled built-in',
     },
   ])('honors the $label setting', async ({ settings }) => {

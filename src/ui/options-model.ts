@@ -33,7 +33,7 @@ export function buildOptionsModel(
   settings: ExtensionSettings,
   builtInRules: readonly RuleDefinition[],
 ): OptionsModel {
-  const disabled = new Set(settings.disabledBuiltInRuleIds);
+  const disabled = new Set(settings.disabledRuleIds);
   return {
     groups: GROUPS.map((group) => ({
       ...group,
@@ -54,7 +54,7 @@ export function buildOptionsModel(
 export function toEditableSettings(settings: ExtensionSettings): EditableSettings {
   return structuredClone({
     enabled: settings.enabled,
-    disabledBuiltInRuleIds: settings.disabledBuiltInRuleIds,
+    disabledRuleIds: settings.disabledRuleIds,
     customRules: settings.customRules,
     excludedHosts: settings.excludedHosts,
   });

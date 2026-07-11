@@ -20,7 +20,6 @@ import {
 import {
   CUSTOM_PERMISSION_LEASE_RENEW_INTERVAL_MS,
   type CustomPermissionLeaseHandle,
-  type CustomPermissionLeaseRelease,
 } from '../custom-permission-lease';
 
 export type { ExactOriginPermission } from './custom-rule';
@@ -39,7 +38,6 @@ export interface OptionsControllerDependencies {
   setAllCquMode: (enabled: boolean) => Promise<boolean>;
   containsPermission: (permission: OriginPermission) => Promise<boolean>;
   requestPermission: (permission: ExactOriginPermission) => Promise<boolean>;
-  removePermission: (permission: OriginPermission) => Promise<boolean>;
   acquirePermissionLease: (
     permission: ExactOriginPermission,
   ) => Promise<CustomPermissionLeaseHandle | null>;
@@ -49,7 +47,8 @@ export interface OptionsControllerDependencies {
   ) => Promise<boolean>;
   releasePermissionLease: (
     nonce: string,
-  ) => Promise<CustomPermissionLeaseRelease | null>;
+    cleanupOrigins?: readonly string[],
+  ) => Promise<boolean>;
 }
 
 interface OptionsElements {
@@ -310,10 +309,10 @@ export async function initializeOptionsController(
     input.setAttribute('aria-label', `${rule.enabled ? '停用' : '启用'}${rule.name}`);
     input.addEventListener('change', () => {
       runEditable((current) => {
-        const disabled = new Set(current.disabledBuiltInRuleIds);
+        const disabled = new Set(current.disabledRuleIds);
         if (input.checked) disabled.delete(rule.id);
         else disabled.add(rule.id);
-        return { ...current, disabledBuiltInRuleIds: [...disabled].sort() };
+        return { ...current, disabledRuleIds: [...disabled].sort() };
       }, `已${input.checked ? '启用' : '停用'} ${rule.name}`);
     });
     return input;
@@ -358,7 +357,7 @@ export async function initializeOptionsController(
       remove.addEventListener('click', () => runEditable((current) => ({
         ...current,
         customRules: current.customRules.filter((item) => item.id !== rule.id),
-        disabledBuiltInRuleIds: current.disabledBuiltInRuleIds.filter((id) => id !== rule.id),
+        disabledRuleIds: current.disabledRuleIds.filter((id) => id !== rule.id),
       }), `已删除 ${rule.name}`));
       article.append(remove);
     }
@@ -394,7 +393,7 @@ export async function initializeOptionsController(
     });
     elements.groups.replaceChildren(...groupNodes);
 
-    const disabled = new Set(saved.settings.disabledBuiltInRuleIds);
+    const disabled = new Set(saved.settings.disabledRuleIds);
     const customNodes = saved.settings.customRules.map((rule): RenderableRule => ({
       ...rule,
       enabled: !disabled.has(rule.id),
@@ -547,6 +546,15 @@ export async function initializeOptionsController(
           )
           : null;
 
+        let grantStillPresent = false;
+        try { grantStillPresent = await dependencies.containsPermission(permission); } catch { grantStillPresent = false; }
+        if (!grantStillPresent) {
+          await heartbeat.stop();
+          try { await dependencies.releasePermissionLease(lease.nonce); } catch { /* TTL cleanup remains. */ }
+          elements.customError.textContent = '权限状态已变化，规则未保存；请重新添加。';
+          return;
+        }
+
         const result = await commit({
           ...toEditableSettings(saved!.settings),
           customRules: [...saved!.settings.customRules, rule],
@@ -560,26 +568,23 @@ export async function initializeOptionsController(
         elements.customError.textContent = result.outcome === 'conflict'
           ? '设置已更新，请重新填写并添加该规则。'
           : '规则未保存。';
-        const fresh = result.snapshotAfterFailure === undefined
-          ? await reloadSavedSnapshot()
-          : result.snapshotAfterFailure;
         const leaseOwnershipCertain = await heartbeat.stop();
-        let released: CustomPermissionLeaseRelease | null = null;
-        try { released = await dependencies.releasePermissionLease(lease.nonce); } catch { released = null; }
-        if (!fresh || !released || newlyAcquiredOrigins === null || !leaseOwnershipCertain) {
+        if (newlyAcquiredOrigins === null || !leaseOwnershipCertain) {
+          try { await dependencies.releasePermissionLease(lease.nonce); } catch { /* TTL cleanup remains. */ }
           elements.customError.textContent = '规则未保存，且无法安全确认权限归属；已保留访问权限。';
           return;
         }
-        const requiredOrigins = new Set(released.requiredOrigins);
-        const removableOrigins = newlyAcquiredOrigins.filter(
-          (origin) => !requiredOrigins.has(origin),
-        );
-        if (removableOrigins.length > 0) {
-          try {
-            await dependencies.removePermission({ origins: removableOrigins });
-          } catch {
-            // Best effort: the visible save failure remains the authoritative outcome.
-          }
+        let released = false;
+        try {
+          released = await dependencies.releasePermissionLease(
+            lease.nonce,
+            newlyAcquiredOrigins,
+          );
+        } catch {
+          released = false;
+        }
+        if (!released) {
+          elements.customError.textContent = '规则未保存，且后台无法完成权限清理；已保留访问权限。';
         }
       } catch {
         elements.customError.textContent = '权限处理未完成；规则未保存，访问权限已保留。';

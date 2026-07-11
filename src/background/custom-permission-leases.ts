@@ -2,21 +2,16 @@ import {
   CUSTOM_PERMISSION_LEASE_TTL_MS,
   customPermissionOriginsForHost,
   isCustomPermissionLeaseNonce,
+  parseCustomPermissionCleanupOrigins,
   parseCustomPermissionLeaseRecord,
   parseCustomPermissionOriginPair,
   type CustomPermissionLeaseRecord,
-  type CustomPermissionLeaseRelease,
+  type CustomPermissionLeaseReleaseOptions,
 } from '../custom-permission-lease';
-import { loadSettings } from '../storage/settings';
+import { loadSettings, type ExtensionSettings } from '../storage/settings';
+import { queueBackgroundOperation } from './coordination';
 
 const LEASES_KEY = 'customPermissionLeases';
-let leaseQueue = Promise.resolve();
-
-function queueLeaseMutation<T>(operation: () => Promise<T>): Promise<T> {
-  const current = leaseQueue.then(operation, operation);
-  leaseQueue = current.then(() => undefined, () => undefined);
-  return current;
-}
 
 async function loadActiveLeases(now: number): Promise<CustomPermissionLeaseRecord[]> {
   const stored = await browser.storage.session.get(LEASES_KEY);
@@ -32,12 +27,50 @@ async function writeLeases(leases: readonly CustomPermissionLeaseRecord[]): Prom
   await browser.storage.session.set({ [LEASES_KEY]: structuredClone(leases) });
 }
 
+async function removeExactOrigins(origins: readonly string[]): Promise<void> {
+  if (origins.length === 0) return;
+  const removed = await browser.permissions.remove({ origins: [...origins] });
+  if (removed !== false) return;
+  const stillGranted = await Promise.all(origins.map((origin) =>
+    browser.permissions.contains({ origins: [origin] }),
+  ));
+  if (stillGranted.some(Boolean)) throw new Error('Custom permission cleanup was not completed');
+}
+
+export async function cleanupDeletedCustomRulePermissions(
+  next: ExtensionSettings,
+  previous: ExtensionSettings,
+  now = Date.now(),
+): Promise<void> {
+  const nextRuleIds = new Set(next.customRules.map((rule) => rule.id));
+  const cleanupCandidates = new Set(
+    previous.customRules
+      .filter((rule) => !nextRuleIds.has(rule.id) && rule.matcher.kind === 'host')
+      .flatMap((rule) => customPermissionOriginsForHost(rule.matcher.host)),
+  );
+  if (cleanupCandidates.size === 0) return;
+
+  const activeLeases = await loadActiveLeases(now);
+  const requiredOrigins = new Set(activeLeases.flatMap((lease) => lease.origins));
+  for (const rule of next.customRules) {
+    if (rule.matcher.kind !== 'host') continue;
+    for (const origin of customPermissionOriginsForHost(rule.matcher.host)) {
+      requiredOrigins.add(origin);
+    }
+  }
+  const removableOrigins = [...cleanupCandidates]
+    .filter((origin) => !requiredOrigins.has(origin))
+    .sort();
+  if (removableOrigins.length === 0) return;
+  await removeExactOrigins(removableOrigins);
+}
+
 export async function acquireCustomPermissionLease(
   originsInput: unknown,
   now?: number,
 ): Promise<{ nonce: string; expiresAt: number }> {
   const origins = parseCustomPermissionOriginPair(originsInput);
-  return queueLeaseMutation(async () => {
+  return queueBackgroundOperation(async () => {
     const mutationNow = now ?? Date.now();
     const leases = await loadActiveLeases(mutationNow);
     const record: CustomPermissionLeaseRecord = {
@@ -58,7 +91,7 @@ export async function renewCustomPermissionLease(
 ): Promise<{ expiresAt: number }> {
   if (!isCustomPermissionLeaseNonce(nonce)) throw new Error('Custom permission lease nonce is invalid');
   const origins = parseCustomPermissionOriginPair(originsInput);
-  return queueLeaseMutation(async () => {
+  return queueBackgroundOperation(async () => {
     const mutationNow = now ?? Date.now();
     const leases = await loadActiveLeases(mutationNow);
     const matching = leases.filter((lease) => lease.nonce === nonce);
@@ -86,15 +119,20 @@ export async function renewCustomPermissionLease(
 
 export async function releaseCustomPermissionLease(
   nonce: string,
-  now?: number,
-): Promise<CustomPermissionLeaseRelease> {
+  options: CustomPermissionLeaseReleaseOptions = {},
+): Promise<void> {
   if (!isCustomPermissionLeaseNonce(nonce)) throw new Error('Custom permission lease nonce is invalid');
-  return queueLeaseMutation(async () => {
-    const mutationNow = now ?? Date.now();
+  const cleanupOrigins = parseCustomPermissionCleanupOrigins(options.cleanupOrigins ?? []);
+  return queueBackgroundOperation(async () => {
+    const mutationNow = options.now ?? Date.now();
     const leases = await loadActiveLeases(mutationNow);
-    if (!leases.some((lease) => lease.nonce === nonce)) {
+    const releasing = leases.find((lease) => lease.nonce === nonce);
+    if (!releasing) {
       await writeLeases(leases);
       throw new Error('Custom permission lease was not found or expired');
+    }
+    if (cleanupOrigins.some((origin) => !releasing.origins.includes(origin))) {
+      throw new Error('Custom permission cleanup exceeds the released lease');
     }
     const remaining = leases.filter((lease) => lease.nonce !== nonce);
     const settings = await loadSettings();
@@ -106,6 +144,8 @@ export async function releaseCustomPermissionLease(
       }
     }
     await writeLeases(remaining);
-    return { requiredOrigins: [...requiredOrigins].sort() };
+    const removableOrigins = cleanupOrigins.filter((origin) => !requiredOrigins.has(origin));
+    if (removableOrigins.length === 0) return;
+    await removeExactOrigins(removableOrigins);
   });
 }

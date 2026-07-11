@@ -49,14 +49,16 @@ export function buildPopupModel(
     !target ||
     !sameRequestUrl(tabUrl ?? '', record.targetUrl)
   ) {
-    return { ...unchanged, canExclude: false };
+    return unchanged;
   }
 
   const error = typeof record.error === 'string' && record.error.length > 0
     ? record.error
     : null;
   return {
-    status: error ? 'aTrust 页面加载失败' : '已通过 aTrust 打开',
+    status: record.ruleId === 'addon-youth-public'
+      ? error ? '团委公网页面加载失败' : '已转换为团委公网链接'
+      : error ? 'aTrust 页面加载失败' : '已通过 aTrust 打开',
     originalHost: original.hostname,
     targetHost: target.hostname,
     canBypass: true,

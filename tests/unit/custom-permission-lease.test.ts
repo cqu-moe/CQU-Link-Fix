@@ -112,7 +112,7 @@ describe('custom permission leases', () => {
 
     await expect(releaseCustomPermissionLease(
       abandoned.nonce,
-      1_000 + CUSTOM_PERMISSION_LEASE_TTL_MS + 1,
+      { now: 1_000 + CUSTOM_PERMISSION_LEASE_TTL_MS + 1 },
     )).rejects.toThrow(/expired|not found/i);
     expect((await browser.storage.session.get()).customPermissionLeases).toEqual([]);
   });
@@ -128,7 +128,7 @@ describe('custom permission leases', () => {
     expect(await browser.storage.session.get()).toEqual({});
   });
 
-  it('release reports origins required by persisted rules and other active leases', async () => {
+  it('release keeps origins required by persisted rules and other active leases', async () => {
     await saveSettings({
       ...DEFAULT_SETTINGS,
       customRules: [customRule('library.cqu.edu.cn')],
@@ -136,9 +136,46 @@ describe('custom permission leases', () => {
     const library = await acquireCustomPermissionLease([...LIBRARY_ORIGINS], 1_000);
     await acquireCustomPermissionLease([...NEWS_ORIGINS], 1_001);
 
-    const result = await releaseCustomPermissionLease(library.nonce, 1_002);
+    const remove = vi.spyOn(browser.permissions, 'remove').mockResolvedValue(true as never);
+    await releaseCustomPermissionLease(library.nonce, {
+      cleanupOrigins: [...LIBRARY_ORIGINS],
+      now: 1_002,
+    });
 
-    expect(result.requiredOrigins).toEqual([...LIBRARY_ORIGINS, ...NEWS_ORIGINS].sort());
+    expect(remove).not.toHaveBeenCalled();
+  });
+
+  it('removes rollback origins inside the lease queue after rechecking persisted and leased owners', async () => {
+    const library = await acquireCustomPermissionLease([...LIBRARY_ORIGINS], 1_000);
+    await acquireCustomPermissionLease([...NEWS_ORIGINS], 1_001);
+    const remove = vi.spyOn(browser.permissions, 'remove').mockResolvedValue(true as never);
+
+    await releaseCustomPermissionLease(library.nonce, {
+      cleanupOrigins: [...LIBRARY_ORIGINS],
+      now: 1_002,
+    });
+
+    expect(remove).toHaveBeenCalledOnce();
+    expect(remove).toHaveBeenCalledWith({ origins: [...LIBRARY_ORIGINS] });
+  });
+
+  it('serializes a later same-origin lease acquisition behind authoritative permission removal', async () => {
+    const library = await acquireCustomPermissionLease([...LIBRARY_ORIGINS], 1_000);
+    const removal = deferred<boolean>();
+    const remove = vi.spyOn(browser.permissions, 'remove').mockReturnValue(removal.promise as never);
+
+    const releasing = releaseCustomPermissionLease(library.nonce, {
+      cleanupOrigins: [...LIBRARY_ORIGINS],
+      now: 1_001,
+    });
+    await vi.waitFor(() => expect(remove).toHaveBeenCalledOnce());
+    const acquiring = acquireCustomPermissionLease([...LIBRARY_ORIGINS], 1_002);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect((await browser.storage.session.get()).customPermissionLeases).toEqual([]);
+
+    removal.resolve(true);
+    await releasing;
+    await expect(acquiring).resolves.toMatchObject({ expiresAt: 1_002 + CUSTOM_PERMISSION_LEASE_TTL_MS });
   });
 
   it('cleans expired leases after a service-worker restart and rejects stale release', async () => {
@@ -146,10 +183,8 @@ describe('custom permission leases', () => {
     const now = 1_000 + CUSTOM_PERMISSION_LEASE_TTL_MS + 1;
     const active = await acquireCustomPermissionLease([...NEWS_ORIGINS], now);
 
-    await expect(releaseCustomPermissionLease(expired.nonce, now)).rejects.toThrow(/lease/i);
-    await expect(releaseCustomPermissionLease(active.nonce, now)).resolves.toEqual({
-      requiredOrigins: [],
-    });
+    await expect(releaseCustomPermissionLease(expired.nonce, { now })).rejects.toThrow(/lease/i);
+    await expect(releaseCustomPermissionLease(active.nonce, { now })).resolves.toBeUndefined();
   });
 
   it('drops malformed persisted lease entries during cleanup', async () => {

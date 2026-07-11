@@ -29,29 +29,37 @@ import {
   getCommittedNavigationSequence,
 } from '../src/background/navigation-state';
 import {
+  CQU_OPTIONAL_ORIGINS,
   loadSettingsSnapshot,
   loadSettings,
   replaceSettingsAtRevision,
+  SettingsApplyFailed,
   SettingsRevisionConflict,
   updateSettingsSnapshot,
 } from '../src/storage/settings';
 import {
   acquireCustomPermissionLease,
+  cleanupDeletedCustomRulePermissions,
   releaseCustomPermissionLease,
   renewCustomPermissionLease,
 } from '../src/background/custom-permission-leases';
+import { queueBackgroundOperation } from '../src/background/coordination';
 
-let reconciliationQueue = Promise.resolve();
 const latestTopFrameNavigation = new Map<number, symbol>();
 const tabFinalizationQueues = new Map<number, Promise<void>>();
 let recordGeneration = 0;
+let startupReconciliation: Promise<void> = Promise.resolve();
+let startupReconciliationPending = false;
 
-function scheduleReconciliation(): void {
-  reconciliationQueue = reconciliationQueue
-    .then(reconcileDynamicRules, reconcileDynamicRules)
-    .catch((error: unknown) => {
-      console.error('Failed to reconcile dynamic DNR rules', error);
-    });
+const settingsMutationHooks = {
+  apply: reconcileDynamicRules,
+  afterApply: cleanupDeletedCustomRulePermissions,
+};
+
+function scheduleReconciliation(label = 'Failed to reconcile dynamic DNR rules'): Promise<void> {
+  const operation = queueBackgroundOperation(() => reconcileDynamicRules());
+  void operation.catch((error: unknown) => console.error(label, error));
+  return operation;
 }
 
 function isExcludedHost(host: string, excludedHosts: readonly string[]): boolean {
@@ -132,6 +140,7 @@ async function rewriteTopFrameNavigation(
   details: Browser.webNavigation.WebNavigationBaseCallbackDetails,
   navigationToken: symbol,
   navigationSequence: number,
+  needsStartupFallback: boolean,
 ): Promise<void> {
   if (details.frameId !== 0 || details.tabId < 0 || details.tabId > MAX_BYPASS_TAB_ID) return;
 
@@ -151,6 +160,15 @@ async function rewriteTopFrameNavigation(
   }
 
   if (await isOriginalBypass(details.tabId, details.url)) return;
+
+  if (needsStartupFallback) {
+    try {
+      await startupReconciliation;
+    } catch {
+      // The fallback below still applies the pure registered transformation.
+    }
+    if (latestTopFrameNavigation.get(details.tabId) !== navigationToken) return;
+  }
 
   const settings = await loadSettings();
   const host = url.hostname.toLowerCase();
@@ -173,6 +191,7 @@ async function rewriteTopFrameNavigation(
       navigationSequence,
     };
     if (
+      needsStartupFallback ||
       !isHandledByDnr(winningRule, url) &&
       winningRule.matcher.kind === 'youth-article' &&
       winningRule.transformer === 'youth-public'
@@ -204,9 +223,15 @@ function scheduleTopFrameRewrite(
 ): void {
   if (details.frameId !== 0 || details.tabId < 0 || details.tabId > MAX_BYPASS_TAB_ID) return;
   const navigationToken = Symbol('top-frame-navigation');
+  const needsStartupFallback = startupReconciliationPending;
   latestTopFrameNavigation.set(details.tabId, navigationToken);
   void allocateNavigationSequence()
-    .then((navigationSequence) => rewriteTopFrameNavigation(details, navigationToken, navigationSequence))
+    .then((navigationSequence) => rewriteTopFrameNavigation(
+      details,
+      navigationToken,
+      navigationSequence,
+      needsStartupFallback,
+    ))
     .catch((error: unknown) => {
       console.error('Failed to rewrite top-frame navigation', error);
     })
@@ -229,25 +254,37 @@ async function dispatchBackgroundMessage(
     return { ok: true, leaseExpiresAt: lease.expiresAt };
   }
   if (message.type === 'release-custom-permission-lease') {
-    const released = await releaseCustomPermissionLease(message.nonce);
-    return { ok: true, requiredOrigins: released.requiredOrigins };
+    await releaseCustomPermissionLease(message.nonce, {
+      cleanupOrigins: message.cleanupOrigins,
+    });
+    return { ok: true };
   }
   if (message.type === 'replace-settings') {
-    const snapshot = await replaceSettingsAtRevision(message.settings, message.expectedRevision);
+    const snapshot = await replaceSettingsAtRevision(
+      message.settings,
+      message.expectedRevision,
+      settingsMutationHooks,
+    );
     return { ok: true, revision: snapshot.revision };
   }
   if (message.type === 'get-settings-snapshot') {
     return { ok: true, snapshot: await loadSettingsSnapshot() };
   }
-  if (message.type === 'persist-all-cqu-mode') {
-    if (typeof message.enabled !== 'boolean') {
-      throw new Error('All-CQU mode must be a boolean');
-    }
-    const snapshot = await updateSettingsSnapshot((current) => ({
-      ...current,
-      enableAllCquDomains: message.enabled,
-    }));
-    return { ok: true, revision: snapshot.revision };
+  if (message.type === 'reconcile-all-cqu-mode') {
+    const snapshot = await updateSettingsSnapshot(async (current) => {
+      if (!message.requested) {
+        try { await browser.permissions.remove(CQU_OPTIONAL_ORIGINS); } catch { /* Recheck below. */ }
+      }
+      let granted = false;
+      try { granted = await browser.permissions.contains(CQU_OPTIONAL_ORIGINS); } catch { granted = false; }
+      if (current.enableAllCquDomains === granted) return current;
+      return { ...current, enableAllCquDomains: granted };
+    }, settingsMutationHooks);
+    return {
+      ok: true,
+      revision: snapshot.revision,
+      enabled: snapshot.settings.enableAllCquDomains,
+    };
   }
   if (message.type === 'get-tab-state') {
     return { ok: true, state: await getTabState(message.tabId) };
@@ -256,7 +293,7 @@ async function dispatchBackgroundMessage(
     await queueTabFinalization(message.tabId, () => openOriginalOnce(message.tabId));
     return { ok: true };
   }
-  await excludeCurrentHost(message.tabId);
+  await excludeCurrentHost(message.tabId, settingsMutationHooks);
   return { ok: true };
 }
 
@@ -278,6 +315,9 @@ function handleRuntimeMessage(
   return dispatchBackgroundMessage(message).catch((error: unknown) => {
     if (error instanceof SettingsRevisionConflict) {
       return { ok: false, code: 'settings-conflict', error: error.message };
+    }
+    if (error instanceof SettingsApplyFailed) {
+      return { ok: false, code: 'settings-apply-failed', error: error.message };
     }
     return { ok: false, code: 'operation-failed', error: 'Background operation failed' };
   });
@@ -362,11 +402,33 @@ function handleTabRemoved(tabId: number): void {
 export default defineBackground(() => {
   latestTopFrameNavigation.clear();
   recordGeneration = 0;
-  scheduleReconciliation();
-  browser.runtime.onInstalled.addListener(scheduleReconciliation);
-  browser.storage.onChanged.addListener((changes, areaName) => {
-    if (areaName === 'local' && changes.settings) scheduleReconciliation();
+  startupReconciliationPending = true;
+  startupReconciliation = scheduleReconciliation('Failed to reconcile dynamic DNR rules at startup')
+    .catch(() => undefined)
+    .finally(() => {
+      startupReconciliationPending = false;
+    });
+  browser.runtime.onInstalled.addListener(() => {
+    void scheduleReconciliation('Failed to reconcile dynamic DNR rules after install');
   });
+  const reconcilePermissionState = (permissions: Browser.permissions.Permissions): void => {
+    const changedOrigins = permissions.origins ?? [];
+    if (!CQU_OPTIONAL_ORIGINS.origins.some((origin) => changedOrigins.includes(origin))) return;
+    scheduleSafely('Failed to reconcile all-CQU permission state', async () => {
+      await updateSettingsSnapshot(async (current) => {
+        let granted = false;
+        try { granted = await browser.permissions.contains(CQU_OPTIONAL_ORIGINS); } catch { granted = false; }
+        if (current.enableAllCquDomains === granted) return current;
+        return { ...current, enableAllCquDomains: granted };
+      }, settingsMutationHooks);
+    });
+  };
+  try {
+    browser.permissions.onAdded.addListener(reconcilePermissionState);
+    browser.permissions.onRemoved.addListener(reconcilePermissionState);
+  } catch {
+    // Some test doubles do not implement optional-permission events.
+  }
   browser.runtime.onMessage.addListener(handleRuntimeMessage);
   browser.webNavigation.onBeforeNavigate.addListener(scheduleTopFrameRewrite);
   browser.webNavigation.onCommitted.addListener(handleCommittedNavigation);

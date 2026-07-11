@@ -6,7 +6,7 @@ import {
   sameRequestUrl,
   type RewriteRecord,
 } from '../rewrite-record';
-import { updateSettings } from '../storage/settings';
+import { updateSettings, type SettingsMutationHooks } from '../storage/settings';
 
 export { canonicalRequestUrl, sameRequestUrl, type RewriteRecord } from '../rewrite-record';
 
@@ -290,11 +290,17 @@ function hostFromHttpUrl(value: string): string {
   return host;
 }
 
-export async function excludeCurrentHost(tabId: number): Promise<void> {
+export async function excludeCurrentHost(
+  tabId: number,
+  hooks?: SettingsMutationHooks,
+): Promise<void> {
   assertTabId(tabId);
+  const tabUrl = (await browser.tabs.get(tabId)).url;
+  if (!tabUrl) throw new Error('The tab has no URL');
   const record = await getTabState(tabId);
-  const source = record?.originalUrl ?? (await browser.tabs.get(tabId)).url;
-  if (!source) throw new Error('The tab has no URL');
+  const source = record && sameRequestUrl(tabUrl, record.targetUrl)
+    ? record.originalUrl
+    : tabUrl;
   const host = hostFromHttpUrl(source);
 
   await updateSettings((latest) => {
@@ -305,7 +311,7 @@ export async function excludeCurrentHost(tabId: number): Promise<void> {
       ...latest,
       excludedHosts: [...new Set(excludedHosts)].sort(),
     };
-  });
+  }, hooks);
 }
 
 async function clearOwnedBypass(

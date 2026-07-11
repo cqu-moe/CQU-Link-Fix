@@ -1,10 +1,9 @@
 import {
   isCustomPermissionLeaseNonce,
+  parseCustomPermissionCleanupOrigins,
   parseCustomPermissionOriginPair,
-  parseRequiredCustomPermissionOrigins,
   type CustomPermissionLeaseHandle,
   type CustomPermissionOriginPair,
-  type CustomPermissionLeaseRelease,
 } from '../custom-permission-lease';
 import type { ExactOriginPermission } from './custom-rule';
 
@@ -64,20 +63,19 @@ export async function renewCustomPermissionLeaseViaBackground(
 
 export async function releaseCustomPermissionLeaseViaBackground(
   nonce: string,
-): Promise<CustomPermissionLeaseRelease | null> {
-  if (!isCustomPermissionLeaseNonce(nonce)) return null;
+  cleanupOrigins: readonly string[] = [],
+): Promise<boolean> {
+  if (!isCustomPermissionLeaseNonce(nonce)) return false;
+  let normalizedCleanup: string[];
+  try { normalizedCleanup = parseCustomPermissionCleanupOrigins(cleanupOrigins); } catch { return false; }
   try {
     const response = await browser.runtime.sendMessage({
       type: 'release-custom-permission-lease',
       nonce,
+      cleanupOrigins: normalizedCleanup,
     }) as unknown;
-    if (
-      !isPlainObject(response) ||
-      !hasExactKeys(response, ['ok', 'requiredOrigins']) ||
-      response.ok !== true
-    ) return null;
-    return { requiredOrigins: parseRequiredCustomPermissionOrigins(response.requiredOrigins) };
+    return isPlainObject(response) && hasExactKeys(response, ['ok']) && response.ok === true;
   } catch {
-    return null;
+    return false;
   }
 }

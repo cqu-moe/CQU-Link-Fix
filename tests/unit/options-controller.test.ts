@@ -3,7 +3,6 @@ import { CUSTOM_PERMISSION_LEASE_TTL_MS } from '../../src/custom-permission-leas
 import { BUILT_IN_RULES } from '../../src/rules/builtins';
 import { compileDynamicRules } from '../../src/rules/dnr';
 import { getEnabledRules } from '../../src/rules/registry';
-import { customRulePermissions } from '../../src/ui/custom-rule';
 import type { CustomRule } from '../../src/rules/types';
 import {
   DEFAULT_SETTINGS,
@@ -64,12 +63,11 @@ function dependencies(
       revision: expectedRevision + 1,
     })),
     setAllCquMode: vi.fn().mockResolvedValue(true),
-    containsPermission: vi.fn().mockResolvedValue(false),
+    containsPermission: vi.fn(async (permission) => permission.origins.length === 2),
     requestPermission: vi.fn().mockResolvedValue(true),
-    removePermission: vi.fn().mockResolvedValue(true),
     acquirePermissionLease: vi.fn().mockResolvedValue({ nonce: crypto.randomUUID() }),
     renewPermissionLease: vi.fn().mockResolvedValue(true),
-    releasePermissionLease: vi.fn().mockResolvedValue({ requiredOrigins: [] }),
+    releasePermissionLease: vi.fn().mockResolvedValue(true),
     ...overrides,
   };
 }
@@ -315,9 +313,11 @@ describe('options controller', () => {
     expect(order).toEqual(['contains', 'contains', 'lease', 'request']);
     expect(deps.requestPermission).toHaveBeenCalledWith(exact);
     for (const resolve of containsResolvers) resolve(false);
+    await vi.waitFor(() => expect(containsResolvers).toHaveLength(3));
+    containsResolvers[2]!(true);
     await settle();
 
-    expect(order).toEqual(['contains', 'contains', 'lease', 'request', 'replace']);
+    expect(order).toEqual(['contains', 'contains', 'lease', 'request', 'contains', 'replace']);
     expect(deps.containsPermission).toHaveBeenNthCalledWith(1, { origins: [exact.origins[0]!] });
     expect(deps.containsPermission).toHaveBeenNthCalledWith(2, { origins: [exact.origins[1]!] });
     expect(deps.requestPermission).toHaveBeenCalledWith(exact);
@@ -383,9 +383,27 @@ describe('options controller', () => {
     expect(deps.replaceSettings).toHaveBeenCalledOnce();
   });
 
+  it('does not persist a rule when a concurrent cleanup removes the grant before commit', async () => {
+    const containsPermission = vi.fn()
+      .mockResolvedValueOnce(false)
+      .mockResolvedValueOnce(false)
+      .mockResolvedValueOnce(false)
+      .mockResolvedValueOnce(false);
+    const deps = dependencies({ containsPermission });
+    await initializeOptionsController(document, deps);
+    (document.querySelector('#custom-host') as HTMLInputElement).value = 'library.cqu.edu.cn';
+
+    button('custom-submit').click();
+    await settle();
+
+    expect(deps.replaceSettings).not.toHaveBeenCalled();
+    expect(deps.releasePermissionLease).toHaveBeenCalledWith(expect.any(String));
+    expect(text('custom-error')).toContain('权限状态已变化');
+  });
+
   it('rolls back only a newly acquired exact grant after CAS failure', async () => {
     const deps = dependencies({
-      containsPermission: vi.fn().mockResolvedValue(false),
+      containsPermission: vi.fn(async (permission) => permission.origins.length === 2),
       requestPermission: vi.fn().mockResolvedValue(true),
       replaceSettings: vi.fn().mockResolvedValue({
         ok: false, code: 'operation-failed', error: '保存失败',
@@ -397,13 +415,14 @@ describe('options controller', () => {
     button('custom-submit').click();
     await settle();
 
-    expect(deps.removePermission).toHaveBeenCalledWith({
-      origins: [
+    expect(deps.releasePermissionLease).toHaveBeenCalledWith(
+      expect.any(String),
+      [
         '*://library.cqu.edu.cn/*',
         'https://library-cqu-edu-cn-s.atrust.cqu.edu.cn/*',
       ],
-    });
-    expect(deps.getSnapshot).toHaveBeenCalledTimes(2);
+    );
+    expect(deps.getSnapshot).toHaveBeenCalledOnce();
     expect(document.querySelectorAll('#custom-list [data-custom-rule-id]').length).toBe(0);
   });
 
@@ -424,8 +443,8 @@ describe('options controller', () => {
     await settle();
 
     expect(deps.requestPermission).toHaveBeenCalledWith({ origins: [source, target] });
-    expect(deps.removePermission).toHaveBeenCalledWith({ origins: [target] });
-    expect(deps.getSnapshot).toHaveBeenCalledTimes(2);
+    expect(deps.releasePermissionLease).toHaveBeenCalledWith(expect.any(String), [target]);
+    expect(deps.getSnapshot).toHaveBeenCalledOnce();
   });
 
   it('does not remove a pre-existing grant after a conflict', async () => {
@@ -447,7 +466,7 @@ describe('options controller', () => {
         'https://library-cqu-edu-cn-s.atrust.cqu.edu.cn/*',
       ],
     });
-    expect(deps.removePermission).not.toHaveBeenCalled();
+    expect(deps.releasePermissionLease).toHaveBeenCalledWith(expect.any(String), []);
     expect(deps.getSnapshot).toHaveBeenCalledTimes(2);
   });
 
@@ -470,7 +489,7 @@ describe('options controller', () => {
     const first = dependencies({
       getSnapshot,
       replaceSettings: replace,
-      containsPermission: vi.fn().mockResolvedValue(false),
+      containsPermission: vi.fn(async (permission) => permission.origins.length === 2),
     });
     await initializeOptionsController(document, first);
     const firstForm = document.querySelector('#custom-rule-form') as HTMLFormElement;
@@ -478,18 +497,12 @@ describe('options controller', () => {
     firstInput.value = 'race.cqu.edu.cn';
 
     fixture();
-    const secondRemove = vi.fn().mockResolvedValue(true);
+    const secondRelease = vi.fn().mockResolvedValue(true);
     const second = dependencies({
       getSnapshot,
       replaceSettings: replace,
-      containsPermission: vi.fn().mockResolvedValue(false),
-      removePermission: secondRemove,
-      releasePermissionLease: vi.fn().mockResolvedValue({
-        requiredOrigins: [
-          '*://race.cqu.edu.cn/*',
-          'https://race-cqu-edu-cn-s.atrust.cqu.edu.cn/*',
-        ],
-      }),
+      containsPermission: vi.fn(async (permission) => permission.origins.length === 2),
+      releasePermissionLease: secondRelease,
     });
     await initializeOptionsController(document, second);
     (document.querySelector('#custom-host') as HTMLInputElement).value = 'race.cqu.edu.cn';
@@ -500,7 +513,7 @@ describe('options controller', () => {
 
     expect(replace).toHaveBeenCalledTimes(2);
     expect(stored.settings.customRules).toHaveLength(1);
-    expect(secondRemove).not.toHaveBeenCalled();
+    expect(secondRelease).toHaveBeenCalledWith(expect.any(String), expect.any(Array));
   });
 
   it('retains an in-flight same-host grant when loser fails before winner persists', async () => {
@@ -514,7 +527,7 @@ describe('options controller', () => {
     });
     const releaseLease = vi.fn(async (nonce: string) => {
       leases.delete(nonce);
-      return { requiredOrigins: [...new Set([...leases.values()].flat())].sort() };
+      return true;
     });
     let resolveWinner!: (result: ReplaceSettingsResult) => void;
     let winnerEditable: EditableSettings | undefined;
@@ -536,12 +549,10 @@ describe('options controller', () => {
     (document.querySelector('#custom-host') as HTMLInputElement).value = 'race.cqu.edu.cn';
 
     fixture();
-    const loserRemove = vi.fn().mockResolvedValue(true);
     const loser = dependencies({
       getSnapshot, replaceSettings: replace,
       acquirePermissionLease: acquireLease,
       releasePermissionLease: releaseLease,
-      removePermission: loserRemove,
     });
     await initializeOptionsController(document, loser);
     (document.querySelector('#custom-host') as HTMLInputElement).value = 'race.cqu.edu.cn';
@@ -551,7 +562,6 @@ describe('options controller', () => {
     button('custom-submit').click();
     await vi.waitFor(() => expect(releaseLease).toHaveBeenCalledOnce());
 
-    expect(loserRemove).not.toHaveBeenCalled();
     stored = snapshot({
       ...DEFAULT_SETTINGS,
       customRules: winnerEditable!.customRules,
@@ -585,10 +595,7 @@ describe('options controller', () => {
     });
     const releaseLease = vi.fn(async (nonce: string) => {
       leases.delete(nonce);
-      const requiredOrigins = [...leases.values()]
-        .filter((lease) => lease.expiresAt > Date.now())
-        .flatMap((lease) => lease.origins);
-      return { requiredOrigins: [...new Set(requiredOrigins)].sort() };
+      return true;
     });
     let resolvePrompt!: (granted: boolean) => void;
     const prompt = new Promise<boolean>((resolve) => { resolvePrompt = resolve; });
@@ -608,7 +615,6 @@ describe('options controller', () => {
     expect([...leases.values()][0]!.expiresAt).toBeGreaterThan(Date.now());
 
     fixture();
-    const loserRemove = vi.fn().mockResolvedValue(true);
     const loser = dependencies({
       replaceSettings: vi.fn().mockResolvedValue({
         ok: false, code: 'operation-failed', error: 'loser failed',
@@ -616,14 +622,12 @@ describe('options controller', () => {
       acquirePermissionLease: acquireLease,
       renewPermissionLease: renewLease,
       releasePermissionLease: releaseLease,
-      removePermission: loserRemove,
     });
     await initializeOptionsController(document, loser);
     (document.querySelector('#custom-host') as HTMLInputElement).value = 'race.cqu.edu.cn';
     button('custom-submit').click();
     await vi.runOnlyPendingTimersAsync();
 
-    expect(loserRemove).not.toHaveBeenCalled();
     const renewalsBeforeSettle = renewLease.mock.calls.length;
     resolvePrompt(false);
     await vi.runOnlyPendingTimersAsync();
@@ -652,22 +656,15 @@ describe('options controller', () => {
     await vi.runOnlyPendingTimersAsync();
 
     expect(deps.renewPermissionLease).toHaveBeenCalledOnce();
-    expect(deps.removePermission).not.toHaveBeenCalled();
+    expect(deps.releasePermissionLease).toHaveBeenCalledWith(expect.any(String));
   });
 
   it('rolls back an unrelated failed grant while another lease remains active', async () => {
-    const otherRule: CustomRule = {
-      id: crypto.randomUUID(), dnrId: 10_002, name: 'other.cqu.edu.cn', description: 'other',
-      category: 'custom', defaultEnabled: true,
-      matcher: { kind: 'host', host: 'other.cqu.edu.cn' }, transformer: 'atrust-domain',
-    };
     const deps = dependencies({
       replaceSettings: vi.fn().mockResolvedValue({
         ok: false, code: 'operation-failed', error: 'save failed',
       }),
-      releasePermissionLease: vi.fn().mockResolvedValue({
-        requiredOrigins: customRulePermissions(otherRule).origins,
-      }),
+      releasePermissionLease: vi.fn().mockResolvedValue(true),
     });
     await initializeOptionsController(document, deps);
     (document.querySelector('#custom-host') as HTMLInputElement).value = 'library.cqu.edu.cn';
@@ -675,12 +672,13 @@ describe('options controller', () => {
     button('custom-submit').click();
     await settle();
 
-    expect(deps.removePermission).toHaveBeenCalledWith({
-      origins: [
+    expect(deps.releasePermissionLease).toHaveBeenCalledWith(
+      expect.any(String),
+      [
         '*://library.cqu.edu.cn/*',
         'https://library-cqu-edu-cn-s.atrust.cqu.edu.cn/*',
       ],
-    });
+    );
   });
 
   it('retains permission when lease acquisition or release validation fails', async () => {
@@ -693,29 +691,29 @@ describe('options controller', () => {
     await settle();
     expect(acquireFailure.requestPermission).toHaveBeenCalledOnce();
     expect(acquireFailure.replaceSettings).not.toHaveBeenCalled();
-    expect(acquireFailure.removePermission).not.toHaveBeenCalled();
+    expect(acquireFailure.releasePermissionLease).not.toHaveBeenCalled();
 
     fixture();
     const releaseFailure = dependencies({
       replaceSettings: vi.fn().mockResolvedValue({
         ok: false, code: 'operation-failed', error: 'save failed',
       }),
-      releasePermissionLease: vi.fn().mockResolvedValue(null),
+      releasePermissionLease: vi.fn().mockResolvedValue(false),
     });
     await initializeOptionsController(document, releaseFailure);
     (document.querySelector('#custom-host') as HTMLInputElement).value = 'library.cqu.edu.cn';
     button('custom-submit').click();
     await settle();
-    expect(releaseFailure.removePermission).not.toHaveBeenCalled();
+    expect(releaseFailure.releasePermissionLease).toHaveBeenCalled();
   });
 
-  it('retains a newly granted origin when failure reload cannot be validated', async () => {
+  it('delegates rollback even when no fresh UI snapshot can be loaded', async () => {
     const getSnapshot = vi.fn()
       .mockResolvedValueOnce(snapshot())
       .mockResolvedValueOnce(null);
     const deps = dependencies({
       getSnapshot,
-      containsPermission: vi.fn().mockResolvedValue(false),
+      containsPermission: vi.fn(async (permission) => permission.origins.length === 2),
       replaceSettings: vi.fn().mockResolvedValue({
         ok: false, code: 'operation-failed', error: '保存失败',
       }),
@@ -726,14 +724,17 @@ describe('options controller', () => {
     button('custom-submit').click();
     await settle();
 
-    expect(getSnapshot).toHaveBeenCalledTimes(2);
-    expect(deps.removePermission).not.toHaveBeenCalled();
+    expect(getSnapshot).toHaveBeenCalledOnce();
+    expect(deps.releasePermissionLease).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.any(Array),
+    );
     expect(text('custom-error')).toContain('规则未保存');
   });
 
   it('rolls back a newly acquired exact grant after a CAS conflict', async () => {
     const deps = dependencies({
-      containsPermission: vi.fn().mockResolvedValue(false),
+      containsPermission: vi.fn(async (permission) => permission.origins.length === 2),
       requestPermission: vi.fn().mockResolvedValue(true),
       replaceSettings: vi.fn().mockResolvedValue({
         ok: false, code: 'settings-conflict', error: 'conflict',
@@ -745,12 +746,13 @@ describe('options controller', () => {
     button('custom-submit').click();
     await settle();
 
-    expect(deps.removePermission).toHaveBeenCalledWith({
-      origins: [
+    expect(deps.releasePermissionLease).toHaveBeenCalledWith(
+      expect.any(String),
+      [
         '*://library.cqu.edu.cn/*',
         'https://library-cqu-edu-cn-s.atrust.cqu.edu.cn/*',
       ],
-    });
+    );
     expect(deps.replaceSettings).toHaveBeenCalledOnce();
   });
 
@@ -773,7 +775,7 @@ describe('options controller', () => {
     await settle();
     const disabled = vi.mocked(deps.replaceSettings).mock.calls[0]![0];
     expect(disabled.customRules[0]!.defaultEnabled).toBe(true);
-    expect(disabled.disabledBuiltInRuleIds).toContain(custom.id);
+    expect(disabled.disabledRuleIds).toContain(custom.id);
     expect(getEnabledRules({ ...disabled, enableAllCquDomains: false }).map((rule) => rule.id))
       .not.toContain(custom.id);
     expect(compileDynamicRules(
@@ -784,7 +786,7 @@ describe('options controller', () => {
     checkbox(`custom-enabled-${custom.id}`).click();
     await settle();
     const reenabled = vi.mocked(deps.replaceSettings).mock.calls[1]![0];
-    expect(reenabled.disabledBuiltInRuleIds).not.toContain(custom.id);
+    expect(reenabled.disabledRuleIds).not.toContain(custom.id);
     expect(getEnabledRules({ ...reenabled, enableAllCquDomains: false }).map((rule) => rule.id))
       .toContain(custom.id);
 
@@ -792,7 +794,7 @@ describe('options controller', () => {
     deleteButton.click();
     await settle();
     expect(vi.mocked(deps.replaceSettings).mock.calls[2]![0].customRules).toEqual([]);
-    expect(vi.mocked(deps.replaceSettings).mock.calls[2]![0].disabledBuiltInRuleIds)
+    expect(vi.mocked(deps.replaceSettings).mock.calls[2]![0].disabledRuleIds)
       .not.toContain(custom.id);
 
     const removeExcluded = document.querySelector('[data-remove-excluded="old.cqu.edu.cn"]') as HTMLButtonElement;
@@ -811,7 +813,7 @@ describe('options controller', () => {
       getSnapshot: vi.fn().mockResolvedValue(snapshot({
         ...DEFAULT_SETTINGS,
         customRules: [custom],
-        disabledBuiltInRuleIds: [custom.id],
+        disabledRuleIds: [custom.id],
       })),
     });
     await initializeOptionsController(document, deps);
@@ -822,7 +824,7 @@ describe('options controller', () => {
 
     const editable = vi.mocked(deps.replaceSettings).mock.calls[0]![0];
     expect(editable.customRules).toEqual([]);
-    expect(editable.disabledBuiltInRuleIds).toEqual([]);
+    expect(editable.disabledRuleIds).toEqual([]);
   });
 
   it('surfaces malformed initial state without enabling controls', async () => {

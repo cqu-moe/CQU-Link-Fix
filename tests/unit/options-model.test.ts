@@ -18,7 +18,7 @@ describe('options model', () => {
   it('derives enabled state from saved built-in overrides', () => {
     const model = buildOptionsModel({
       ...DEFAULT_SETTINGS,
-      disabledBuiltInRuleIds: ['core-sso'],
+      disabledRuleIds: ['core-sso'],
     }, BUILT_IN_RULES);
 
     expect(model.groups[0]!.rules[0]).toMatchObject({ id: 'core-sso', enabled: false });
@@ -46,7 +46,7 @@ describe('options model', () => {
 
     expect(editable).toEqual({
       enabled: true,
-      disabledBuiltInRuleIds: [],
+      disabledRuleIds: [],
       customRules: [],
       excludedHosts: ['one.cqu.edu.cn'],
     });
