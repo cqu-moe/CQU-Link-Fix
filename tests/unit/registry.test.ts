@@ -5,7 +5,7 @@ import { DEFAULT_SETTINGS } from '../../src/storage/settings';
 import type { CustomRule } from '../../src/rules/types';
 
 describe('rule registry', () => {
-  it('omits locally disabled custom rules', () => {
+  it('uses disabled rule IDs, not the custom default flag, for custom overrides', () => {
     const custom = {
       id: 'custom-disabled',
       dnrId: 10_001,
@@ -18,7 +18,12 @@ describe('rule registry', () => {
     };
 
     expect(getEnabledRules({ ...DEFAULT_SETTINGS, customRules: [custom] }))
-      .not.toContainEqual(custom);
+      .toContainEqual(custom);
+    expect(getEnabledRules({
+      ...DEFAULT_SETTINGS,
+      customRules: [custom],
+      disabledBuiltInRuleIds: [custom.id],
+    })).not.toContainEqual(custom);
   });
   it('ships stable default built-ins', () => {
     expect(BUILT_IN_RULES.map(({ id, dnrId }) => [id, dnrId])).toEqual([

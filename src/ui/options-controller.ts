@@ -43,6 +43,10 @@ interface OptionsElements {
 }
 
 type CommitOutcome = 'success' | 'conflict' | 'failure';
+interface CommitResult {
+  outcome: CommitOutcome;
+  snapshotAfterFailure?: SettingsSnapshot | null;
+}
 
 const initializedScopes = new WeakSet<Element>();
 
@@ -79,11 +83,15 @@ function cloneSnapshot(value: unknown): SettingsSnapshot | null {
   }
 }
 
-function isReplaceResult(value: unknown): value is ReplaceSettingsResult {
+function isReplaceResult(
+  value: unknown,
+  expectedRevision: number,
+): value is ReplaceSettingsResult {
   if (!value || typeof value !== 'object') return false;
   const candidate = value as { ok?: unknown; revision?: unknown; code?: unknown; error?: unknown };
   if (candidate.ok === true) {
-    return Number.isSafeInteger(candidate.revision) && (candidate.revision as number) >= 0;
+    return Number.isSafeInteger(expectedRevision + 1) &&
+      candidate.revision === expectedRevision + 1;
   }
   return candidate.ok === false &&
     (candidate.code === 'settings-conflict' || candidate.code === 'operation-failed') &&
@@ -129,11 +137,22 @@ export async function initializeOptionsController(
     }
   };
 
+  const reloadSavedSnapshot = async (): Promise<SettingsSnapshot | null> => {
+    let fresh: SettingsSnapshot | null = null;
+    try {
+      fresh = cloneSnapshot(await dependencies.getSnapshot());
+    } catch {
+      fresh = null;
+    }
+    if (fresh) saved = fresh;
+    return fresh;
+  };
+
   const commit = async (
     candidate: EditableSettings,
     successMessage: string,
-  ): Promise<CommitOutcome> => {
-    if (!saved) return 'failure';
+  ): Promise<CommitResult> => {
+    if (!saved) return { outcome: 'failure' };
     const before = structuredClone(saved);
     let response: unknown;
     try {
@@ -142,12 +161,12 @@ export async function initializeOptionsController(
       const message = error instanceof Error && error.message ? error.message : '后台通信失败';
       saved = before;
       setStatus(`操作未完成：${message}`, 'error');
-      return 'failure';
+      return { outcome: 'failure' };
     }
-    if (!isReplaceResult(response)) {
+    if (!isReplaceResult(response, before.revision)) {
       saved = before;
       setStatus('操作未完成：后台返回了无效结果', 'error');
-      return 'failure';
+      return { outcome: 'failure' };
     }
     if (response.ok) {
       saved = {
@@ -158,15 +177,10 @@ export async function initializeOptionsController(
         revision: response.revision,
       };
       setStatus(successMessage, 'success');
-      return 'success';
+      return { outcome: 'success' };
     }
     if (response.code === 'settings-conflict') {
-      let fresh: SettingsSnapshot | null = null;
-      try {
-        fresh = cloneSnapshot(await dependencies.getSnapshot());
-      } catch {
-        fresh = null;
-      }
+      const fresh = await reloadSavedSnapshot();
       if (fresh) {
         saved = fresh;
         setStatus('设置已在其他页面更新；已保留较新的设置，请重新应用本次更改。', 'error');
@@ -174,11 +188,11 @@ export async function initializeOptionsController(
         saved = before;
         setStatus('设置已在其他页面更新，但无法重新读取；请刷新页面后再试。', 'error');
       }
-      return 'conflict';
+      return { outcome: 'conflict', snapshotAfterFailure: fresh };
     }
     saved = before;
     setStatus(`操作未完成：${response.error}`, 'error');
-    return 'failure';
+    return { outcome: 'failure' };
   };
 
   const runEditable = (
@@ -210,12 +224,12 @@ export async function initializeOptionsController(
     input.setAttribute('aria-label', `${checked ? '停用' : '启用'}${rule.name}`);
     input.addEventListener('change', () => {
       if (custom) {
-        runEditable((current) => ({
-          ...current,
-          customRules: current.customRules.map((item) =>
-            item.id === rule.id ? { ...item, defaultEnabled: input.checked } : item,
-          ),
-        }), `已${input.checked ? '启用' : '停用'} ${rule.name}`);
+        runEditable((current) => {
+          const disabled = new Set(current.disabledBuiltInRuleIds);
+          if (input.checked) disabled.delete(rule.id);
+          else disabled.add(rule.id);
+          return { ...current, disabledBuiltInRuleIds: [...disabled].sort() };
+        }, `已${input.checked ? '启用' : '停用'} ${rule.name}`);
         return;
       }
       runEditable((current) => {
@@ -259,6 +273,7 @@ export async function initializeOptionsController(
       remove.addEventListener('click', () => runEditable((current) => ({
         ...current,
         customRules: current.customRules.filter((item) => item.id !== rule.id),
+        disabledBuiltInRuleIds: current.disabledBuiltInRuleIds.filter((id) => id !== rule.id),
       }), `已删除 ${rule.name}`));
       article.append(remove);
     }
@@ -294,8 +309,9 @@ export async function initializeOptionsController(
     });
     elements.groups.replaceChildren(...groupNodes);
 
+    const disabled = new Set(saved.settings.disabledBuiltInRuleIds);
     const customNodes = saved.settings.customRules.map((rule) =>
-      renderRuleCard(rule, rule.defaultEnabled, true),
+      renderRuleCard(rule, !disabled.has(rule.id), true),
     );
     elements.customList.replaceChildren(...customNodes);
     if (customNodes.length === 0) appendEmptyState(root, elements.customList, '尚未添加本地精确规则。');
@@ -392,22 +408,38 @@ export async function initializeOptionsController(
     pending = true;
     renderControls();
     // Start permission acquisition directly in the submit gesture, before CAS work.
-    const permissionOperation = (async () => {
-      const missingOrigins: string[] = [];
-      for (const origin of permission.origins) {
-        const alreadyGranted = await dependencies.containsPermission({ origins: [origin] });
-        if (!alreadyGranted) missingOrigins.push(origin);
+    const containmentOperation = Promise.allSettled(permission.origins.map((origin) => {
+      try {
+        return dependencies.containsPermission({ origins: [origin] });
+      } catch (error) {
+        return Promise.reject(error);
       }
-      if (missingOrigins.length === 0) return { granted: true, rollbackPermission: null };
-      const rollbackPermission: ExactOriginPermission = { origins: missingOrigins };
-      const granted = await dependencies.requestPermission(rollbackPermission);
-      return { granted, rollbackPermission: granted ? rollbackPermission : null };
+    }));
+    let requestOperation: Promise<boolean>;
+    try {
+      requestOperation = dependencies.requestPermission(permission);
+    } catch (error) {
+      requestOperation = Promise.reject(error);
+    }
+    const permissionOperation = (async () => {
+      const granted = await requestOperation;
+      if (!granted) return { granted: false, newlyAcquiredOrigins: [] as string[] };
+      const containment = await containmentOperation;
+      const canProveOwnership = containment.every((result) => result.status === 'fulfilled');
+      return {
+        granted: true,
+        newlyAcquiredOrigins: canProveOwnership
+          ? permission.origins.filter((_, index) =>
+            containment[index]!.status === 'fulfilled' && !containment[index]!.value,
+          )
+          : null,
+      };
     })();
 
     void (async () => {
       let acquisition: {
         granted: boolean;
-        rollbackPermission: ExactOriginPermission | null;
+        newlyAcquiredOrigins: string[] | null;
       };
       try {
         acquisition = await permissionOperation;
@@ -420,20 +452,33 @@ export async function initializeOptionsController(
         return;
       }
 
-      const outcome = await commit({
+      const result = await commit({
         ...toEditableSettings(saved!.settings),
         customRules: [...saved!.settings.customRules, rule],
       }, `已添加 ${rule.name}`);
-      if (outcome === 'success') {
+      if (result.outcome === 'success') {
         elements.customHost.value = '';
         return;
       }
-      elements.customError.textContent = outcome === 'conflict'
+      elements.customError.textContent = result.outcome === 'conflict'
         ? '设置已更新，请重新填写并添加该规则。'
         : '规则未保存。';
-      if (acquisition.rollbackPermission) {
+      const fresh = result.snapshotAfterFailure === undefined
+        ? await reloadSavedSnapshot()
+        : result.snapshotAfterFailure;
+      if (!fresh || acquisition.newlyAcquiredOrigins === null) {
+        elements.customError.textContent = '规则未保存，且无法安全确认权限归属；已保留访问权限。';
+        return;
+      }
+      const persistedOrigins = new Set(fresh.settings.customRules.flatMap((persistedRule) =>
+        customRulePermissions(persistedRule).origins,
+      ));
+      const removableOrigins = acquisition.newlyAcquiredOrigins.filter(
+        (origin) => !persistedOrigins.has(origin),
+      );
+      if (removableOrigins.length > 0) {
         try {
-          await dependencies.removePermission(acquisition.rollbackPermission);
+          await dependencies.removePermission({ origins: removableOrigins });
         } catch {
           // Best effort: the visible save failure remains the authoritative outcome.
         }

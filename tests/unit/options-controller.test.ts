@@ -1,5 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { BUILT_IN_RULES } from '../../src/rules/builtins';
+import { compileDynamicRules } from '../../src/rules/dnr';
+import { getEnabledRules } from '../../src/rules/registry';
 import type { CustomRule } from '../../src/rules/types';
 import {
   DEFAULT_SETTINGS,
@@ -55,7 +57,10 @@ function dependencies(
   return {
     builtInRules: BUILT_IN_RULES,
     getSnapshot: vi.fn().mockResolvedValue(snapshot()),
-    replaceSettings: vi.fn().mockResolvedValue({ ok: true, revision: 4 }),
+    replaceSettings: vi.fn().mockImplementation(async (_settings, expectedRevision) => ({
+      ok: true as const,
+      revision: expectedRevision + 1,
+    })),
     setAllCquMode: vi.fn().mockResolvedValue(true),
     containsPermission: vi.fn().mockResolvedValue(false),
     requestPermission: vi.fn().mockResolvedValue(true),
@@ -131,6 +136,25 @@ describe('options controller', () => {
     expect(checkbox('master-enabled').checked).toBe(true);
     expect(text('status')).toContain('保存失败');
   });
+
+  it.each([3, 2, 5])(
+    'rejects non-successor CAS revision %s without changing saved UI state',
+    async (revision) => {
+      const deps = dependencies({
+        replaceSettings: vi.fn().mockResolvedValue({ ok: true, revision }),
+      });
+      await initializeOptionsController(document, deps);
+
+      checkbox('master-enabled').click();
+      await settle();
+
+      expect(checkbox('master-enabled').checked).toBe(true);
+      expect(text('status')).toContain('无效结果');
+      checkbox('master-enabled').click();
+      await settle();
+      expect(deps.replaceSettings).toHaveBeenNthCalledWith(2, expect.anything(), 3);
+    },
+  );
 
   it('lets two clients race once, reloads the conflict loser, and never retries', async () => {
     let stored = snapshot();
@@ -226,10 +250,14 @@ describe('options controller', () => {
     expect(text('status')).toContain('未授予');
   });
 
-  it('requests exact custom origins before CAS and saves once', async () => {
+  it('requests full exact custom origins synchronously before containment resolves and before CAS', async () => {
     const order: string[] = [];
+    const containsResolvers: Array<(value: boolean) => void> = [];
     const deps = dependencies({
-      containsPermission: vi.fn(async () => { order.push('contains'); return false; }),
+      containsPermission: vi.fn(() => {
+        order.push('contains');
+        return new Promise<boolean>((resolve) => containsResolvers.push(resolve));
+      }),
       requestPermission: vi.fn(async () => { order.push('request'); return true; }),
       replaceSettings: vi.fn(async () => {
         order.push('replace');
@@ -241,7 +269,6 @@ describe('options controller', () => {
     input.value = 'LIBRARY.CQU.EDU.CN';
 
     button('custom-submit').click();
-    await settle();
 
     const exact: ExactOriginPermission = {
       origins: [
@@ -249,6 +276,11 @@ describe('options controller', () => {
         'https://library-cqu-edu-cn-s.atrust.cqu.edu.cn/*',
       ],
     };
+    expect(order).toEqual(['contains', 'contains', 'request']);
+    expect(deps.requestPermission).toHaveBeenCalledWith(exact);
+    for (const resolve of containsResolvers) resolve(false);
+    await settle();
+
     expect(order).toEqual(['contains', 'contains', 'request', 'replace']);
     expect(deps.containsPermission).toHaveBeenNthCalledWith(1, { origins: [exact.origins[0]!] });
     expect(deps.containsPermission).toHaveBeenNthCalledWith(2, { origins: [exact.origins[1]!] });
@@ -334,6 +366,7 @@ describe('options controller', () => {
         'https://library-cqu-edu-cn-s.atrust.cqu.edu.cn/*',
       ],
     });
+    expect(deps.getSnapshot).toHaveBeenCalledTimes(2);
     expect(document.querySelectorAll('#custom-list [data-custom-rule-id]').length).toBe(0);
   });
 
@@ -353,8 +386,9 @@ describe('options controller', () => {
     button('custom-submit').click();
     await settle();
 
-    expect(deps.requestPermission).toHaveBeenCalledWith({ origins: [target] });
+    expect(deps.requestPermission).toHaveBeenCalledWith({ origins: [source, target] });
     expect(deps.removePermission).toHaveBeenCalledWith({ origins: [target] });
+    expect(deps.getSnapshot).toHaveBeenCalledTimes(2);
   });
 
   it('does not remove a pre-existing grant after a conflict', async () => {
@@ -370,9 +404,82 @@ describe('options controller', () => {
     button('custom-submit').click();
     await settle();
 
-    expect(deps.requestPermission).not.toHaveBeenCalled();
+    expect(deps.requestPermission).toHaveBeenCalledWith({
+      origins: [
+        '*://library.cqu.edu.cn/*',
+        'https://library-cqu-edu-cn-s.atrust.cqu.edu.cn/*',
+      ],
+    });
     expect(deps.removePermission).not.toHaveBeenCalled();
     expect(deps.getSnapshot).toHaveBeenCalledTimes(2);
+  });
+
+  it('retains a winning same-host grant when a second controller loses CAS', async () => {
+    let stored = snapshot();
+    const replace = vi.fn(async (
+      editable: EditableSettings,
+      expectedRevision: number,
+    ): Promise<ReplaceSettingsResult> => {
+      if (expectedRevision !== stored.revision) {
+        return { ok: false, code: 'settings-conflict', error: 'conflict' };
+      }
+      stored = {
+        settings: { ...structuredClone(editable), enableAllCquDomains: false },
+        revision: expectedRevision + 1,
+      };
+      return { ok: true, revision: stored.revision };
+    });
+    const getSnapshot = vi.fn(async () => structuredClone(stored));
+    const first = dependencies({
+      getSnapshot,
+      replaceSettings: replace,
+      containsPermission: vi.fn().mockResolvedValue(false),
+    });
+    await initializeOptionsController(document, first);
+    const firstForm = document.querySelector('#custom-rule-form') as HTMLFormElement;
+    const firstInput = document.querySelector('#custom-host') as HTMLInputElement;
+    firstInput.value = 'race.cqu.edu.cn';
+
+    fixture();
+    const secondRemove = vi.fn().mockResolvedValue(true);
+    const second = dependencies({
+      getSnapshot,
+      replaceSettings: replace,
+      containsPermission: vi.fn().mockResolvedValue(false),
+      removePermission: secondRemove,
+    });
+    await initializeOptionsController(document, second);
+    (document.querySelector('#custom-host') as HTMLInputElement).value = 'race.cqu.edu.cn';
+
+    firstForm.dispatchEvent(new Event('submit', { cancelable: true }));
+    button('custom-submit').click();
+    await settle();
+
+    expect(replace).toHaveBeenCalledTimes(2);
+    expect(stored.settings.customRules).toHaveLength(1);
+    expect(secondRemove).not.toHaveBeenCalled();
+  });
+
+  it('retains a newly granted origin when failure reload cannot be validated', async () => {
+    const getSnapshot = vi.fn()
+      .mockResolvedValueOnce(snapshot())
+      .mockResolvedValueOnce(null);
+    const deps = dependencies({
+      getSnapshot,
+      containsPermission: vi.fn().mockResolvedValue(false),
+      replaceSettings: vi.fn().mockResolvedValue({
+        ok: false, code: 'operation-failed', error: '保存失败',
+      }),
+    });
+    await initializeOptionsController(document, deps);
+    (document.querySelector('#custom-host') as HTMLInputElement).value = 'library.cqu.edu.cn';
+
+    button('custom-submit').click();
+    await settle();
+
+    expect(getSnapshot).toHaveBeenCalledTimes(2);
+    expect(deps.removePermission).not.toHaveBeenCalled();
+    expect(text('custom-error')).toContain('规则未保存');
   });
 
   it('rolls back a newly acquired exact grant after a CAS conflict', async () => {
@@ -398,7 +505,7 @@ describe('options controller', () => {
     expect(deps.replaceSettings).toHaveBeenCalledOnce();
   });
 
-  it('toggles and deletes custom rules and removes exclusions through editable CAS', async () => {
+  it('toggles custom rules through disabled IDs, updates runtime DNR state, and clears stale IDs on delete', async () => {
     const custom: CustomRule = {
       id: crypto.randomUUID(), dnrId: 10_001, name: 'library.cqu.edu.cn',
       description: 'custom', category: 'custom', defaultEnabled: true,
@@ -415,17 +522,58 @@ describe('options controller', () => {
 
     checkbox(`custom-enabled-${custom.id}`).click();
     await settle();
-    expect(vi.mocked(deps.replaceSettings).mock.calls[0]![0].customRules[0]!.defaultEnabled).toBe(false);
+    const disabled = vi.mocked(deps.replaceSettings).mock.calls[0]![0];
+    expect(disabled.customRules[0]!.defaultEnabled).toBe(true);
+    expect(disabled.disabledBuiltInRuleIds).toContain(custom.id);
+    expect(getEnabledRules({ ...disabled, enableAllCquDomains: false }).map((rule) => rule.id))
+      .not.toContain(custom.id);
+    expect(compileDynamicRules(
+      getEnabledRules({ ...disabled, enableAllCquDomains: false }),
+      disabled.excludedHosts,
+    ).map((rule) => rule.id)).not.toContain(custom.dnrId);
+
+    checkbox(`custom-enabled-${custom.id}`).click();
+    await settle();
+    const reenabled = vi.mocked(deps.replaceSettings).mock.calls[1]![0];
+    expect(reenabled.disabledBuiltInRuleIds).not.toContain(custom.id);
+    expect(getEnabledRules({ ...reenabled, enableAllCquDomains: false }).map((rule) => rule.id))
+      .toContain(custom.id);
 
     const deleteButton = document.querySelector(`[data-delete-custom="${custom.id}"]`) as HTMLButtonElement;
     deleteButton.click();
     await settle();
-    expect(vi.mocked(deps.replaceSettings).mock.calls[1]![0].customRules).toEqual([]);
+    expect(vi.mocked(deps.replaceSettings).mock.calls[2]![0].customRules).toEqual([]);
+    expect(vi.mocked(deps.replaceSettings).mock.calls[2]![0].disabledBuiltInRuleIds)
+      .not.toContain(custom.id);
 
     const removeExcluded = document.querySelector('[data-remove-excluded="old.cqu.edu.cn"]') as HTMLButtonElement;
     removeExcluded.click();
     await settle();
-    expect(vi.mocked(deps.replaceSettings).mock.calls[2]![0].excludedHosts).toEqual([]);
+    expect(vi.mocked(deps.replaceSettings).mock.calls[3]![0].excludedHosts).toEqual([]);
+  });
+
+  it('deleting an already-disabled custom rule removes its stale disabled ID', async () => {
+    const custom: CustomRule = {
+      id: crypto.randomUUID(), dnrId: 10_001, name: 'library.cqu.edu.cn',
+      description: 'custom', category: 'custom', defaultEnabled: true,
+      matcher: { kind: 'host', host: 'library.cqu.edu.cn' }, transformer: 'atrust-domain',
+    };
+    const deps = dependencies({
+      getSnapshot: vi.fn().mockResolvedValue(snapshot({
+        ...DEFAULT_SETTINGS,
+        customRules: [custom],
+        disabledBuiltInRuleIds: [custom.id],
+      })),
+    });
+    await initializeOptionsController(document, deps);
+
+    const deleteButton = document.querySelector(`[data-delete-custom="${custom.id}"]`) as HTMLButtonElement;
+    deleteButton.click();
+    await settle();
+
+    const editable = vi.mocked(deps.replaceSettings).mock.calls[0]![0];
+    expect(editable.customRules).toEqual([]);
+    expect(editable.disabledBuiltInRuleIds).toEqual([]);
   });
 
   it('surfaces malformed initial state without enabling controls', async () => {

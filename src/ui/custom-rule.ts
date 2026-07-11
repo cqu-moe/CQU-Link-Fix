@@ -1,9 +1,14 @@
 import { BUILT_IN_RULES } from '../rules/builtins';
 import type { CustomRule } from '../rules/types';
-import { normalizeCustomCquHost } from '../storage/settings';
+import {
+  assertCustomDnrId,
+  CUSTOM_DNR_ID_MAX,
+  CUSTOM_DNR_ID_MIN,
+  isBuiltInSourceHost,
+  normalizeCustomCquHost,
+} from '../rules/custom-rule-policy';
 
-export const CUSTOM_DNR_ID_MIN = 10_001;
-export const CUSTOM_DNR_ID_MAX = 79_999;
+export { CUSTOM_DNR_ID_MAX, CUSTOM_DNR_ID_MIN } from '../rules/custom-rule-policy';
 
 export interface ExactOriginPermission {
   origins: string[];
@@ -20,18 +25,18 @@ export function parseCustomRule(
   dnrId: number,
   existingCustomRules: readonly CustomRule[] = [],
 ): CustomRule {
-  if (
-    !Number.isSafeInteger(dnrId) ||
-    dnrId < CUSTOM_DNR_ID_MIN ||
-    dnrId > CUSTOM_DNR_ID_MAX ||
-    BUILT_IN_RULES.some((rule) => rule.dnrId === dnrId) ||
-    existingCustomRules.some((rule) => rule.dnrId === dnrId)
-  ) {
+  try {
+    assertCustomDnrId(dnrId);
+  } catch {
     throw new Error('自定义规则 DNR ID 不可用');
   }
+  if (
+    BUILT_IN_RULES.some((rule) => rule.dnrId === dnrId) ||
+    existingCustomRules.some((rule) => rule.dnrId === dnrId)
+  ) throw new Error('自定义规则 DNR ID 不可用');
 
   const host = normalizeCustomCquHost(input);
-  if (BUILT_IN_RULES.some((rule) => rule.matcher.host.toLowerCase() === host)) {
+  if (isBuiltInSourceHost(host)) {
     throw new Error('该域名已有内置规则');
   }
   if (sourceHosts(existingCustomRules).has(host)) {

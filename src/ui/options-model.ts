@@ -37,7 +37,10 @@ export function buildOptionsModel(
       ...group,
       rules: builtInRules
         .filter((rule) => rule.category === group.category)
-        .map((rule) => ({ ...structuredClone(rule), enabled: !disabled.has(rule.id) })),
+        .map((rule) => ({
+          ...structuredClone(rule),
+          enabled: rule.defaultEnabled && !disabled.has(rule.id),
+        })),
     })),
   };
 }

@@ -1,5 +1,11 @@
 import type { CustomRule } from '../rules/types';
 import { BUILT_IN_RULES } from '../rules/builtins';
+import {
+  assertCustomDnrId,
+  isBuiltInSourceHost,
+  normalizeCustomCquHost,
+  normalizeDnsHost,
+} from '../rules/custom-rule-policy';
 
 export interface ExtensionSettings {
   enabled: boolean;
@@ -28,7 +34,6 @@ const SETTINGS_REVISION_KEY = 'settingsRevision';
 const CQU_OPTIONAL_ORIGINS = {
   origins: ['*://cqu.edu.cn/*', '*://*.cqu.edu.cn/*'],
 };
-const MAX_DNR_RULE_ID = 2_147_483_647;
 const BUILT_IN_RULE_IDS = new Set(BUILT_IN_RULES.map((rule) => rule.id));
 const BUILT_IN_DNR_IDS = new Set(BUILT_IN_RULES.map((rule) => rule.dnrId));
 const EXCLUSION_DNR_ID_START = 80_000;
@@ -63,11 +68,18 @@ export async function replaceSettingsViaBackground(
   next: EditableSettings,
   expectedRevision: number,
 ): Promise<ReplaceSettingsResult> {
-  return sendSettingsMutationMessage({
+  const result = await sendSettingsMutationMessage({
     type: 'replace-settings',
     settings: structuredClone(next),
     expectedRevision,
   });
+  if (
+    result.ok &&
+    (!Number.isSafeInteger(expectedRevision + 1) || result.revision !== expectedRevision + 1)
+  ) {
+    return { ok: false, code: 'operation-failed', error: 'Background operation failed' };
+  }
+  return result;
 }
 
 export async function getSettingsSnapshotViaBackground(): Promise<SettingsSnapshot | null> {
@@ -171,27 +183,31 @@ export async function replaceSettingsAtRevision(
 
 export async function setAllCquMode(enabled: boolean): Promise<boolean> {
   if (enabled) {
-    let alreadyGranted: boolean;
+    let containmentOperation: Promise<boolean>;
     try {
-      alreadyGranted = await browser.permissions.contains(CQU_OPTIONAL_ORIGINS);
-    } catch {
+      containmentOperation = browser.permissions.contains(CQU_OPTIONAL_ORIGINS);
+    } catch (error) {
+      containmentOperation = Promise.reject(error);
+    }
+    let requestOperation: Promise<boolean>;
+    try {
+      requestOperation = browser.permissions.request(CQU_OPTIONAL_ORIGINS);
+    } catch (error) {
+      requestOperation = Promise.reject(error);
+    }
+    const [containment, request] = await Promise.allSettled([
+      containmentOperation,
+      requestOperation,
+    ]);
+    if (
+      containment.status === 'rejected' ||
+      request.status === 'rejected' ||
+      !request.value
+    ) {
       await persistAllCquModeViaBackground(false);
       return false;
     }
-
-    let newlyAcquired = false;
-    if (!alreadyGranted) {
-      try {
-        newlyAcquired = await browser.permissions.request(CQU_OPTIONAL_ORIGINS);
-      } catch {
-        await persistAllCquModeViaBackground(false);
-        return false;
-      }
-      if (!newlyAcquired) {
-        await persistAllCquModeViaBackground(false);
-        return false;
-      }
-    }
+    const newlyAcquired = !containment.value;
 
     if (await persistAllCquModeViaBackground(true)) return true;
 
@@ -275,6 +291,7 @@ export function validateEditableSettings(value: unknown): EditableSettings {
   const exclusionIds = new Set(
     normalizedExcludedHosts.map((_, index) => EXCLUSION_DNR_ID_START + index),
   );
+  const customHosts = new Set<string>();
   for (const rule of customRules) {
     if (ruleIds.has(rule.id)) throw new Error(`Colliding custom rule ID: ${rule.id}`);
     if (
@@ -284,8 +301,14 @@ export function validateEditableSettings(value: unknown): EditableSettings {
     ) {
       throw new Error(`Colliding custom DNR rule ID: ${rule.dnrId}`);
     }
+    const host = rule.matcher.host;
+    if (isBuiltInSourceHost(host)) {
+      throw new Error(`Custom host duplicates a built-in source: ${host}`);
+    }
+    if (customHosts.has(host)) throw new Error(`Duplicate custom source host: ${host}`);
     ruleIds.add(rule.id);
     dnrIds.add(rule.dnrId);
+    customHosts.add(host);
   }
   return {
     enabled: value.enabled,
@@ -316,15 +339,18 @@ function parseCustomRule(value: unknown): CustomRule {
     typeof value.description !== 'string' ||
     value.category !== 'custom' ||
     typeof value.defaultEnabled !== 'boolean' ||
-    !Number.isInteger(value.dnrId) ||
-    (value.dnrId as number) < 1 ||
-    (value.dnrId as number) > MAX_DNR_RULE_ID ||
     !isPlainObject(value.matcher)
   ) {
     throw new Error('Custom rule fields are invalid');
   }
 
   let matcher: CustomRule['matcher'];
+  let dnrId: number;
+  try {
+    dnrId = assertCustomDnrId(value.dnrId);
+  } catch {
+    throw new Error('Custom DNR rule ID is invalid');
+  }
   if (value.matcher.kind === 'host') {
     if (!hasExactKeys(value.matcher, ['host', 'kind'])) {
       throw new Error('Custom host matcher has an invalid shape');
@@ -343,7 +369,7 @@ function parseCustomRule(value: unknown): CustomRule {
 
   return {
     id: value.id.trim(),
-    dnrId: value.dnrId as number,
+    dnrId,
     name: value.name,
     description: value.description,
     category: 'custom',
@@ -358,35 +384,6 @@ function parseStringArray(value: unknown, label: string): string[] {
     throw new Error(`Settings ${label} must contain non-empty strings`);
   }
   return structuredClone(value);
-}
-
-export function normalizeCustomCquHost(value: unknown): string {
-  const host = normalizeDnsHost(value);
-  if (!host || !(host === 'cqu.edu.cn' || host.endsWith('.cqu.edu.cn'))) {
-    throw new Error('首版仅支持 CQU 域名');
-  }
-  if (host === 'atrust.cqu.edu.cn' || host.endsWith('.atrust.cqu.edu.cn')) {
-    throw new Error('不能把 aTrust 地址作为源地址');
-  }
-  return host;
-}
-
-function normalizeDnsHost(value: unknown): string | null {
-  if (typeof value !== 'string') return null;
-  const normalized = value.trim().toLowerCase();
-  if (
-    !normalized ||
-    normalized.length > 253 ||
-    !normalized.split('.').every(
-      (label) =>
-        label.length > 0 &&
-        label.length <= 63 &&
-        /^[a-z\d](?:[a-z\d-]*[a-z\d])?$/i.test(label),
-    )
-  ) {
-    return null;
-  }
-  return normalized;
 }
 
 function isSafeRevision(value: unknown): value is number {

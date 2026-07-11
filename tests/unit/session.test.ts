@@ -997,6 +997,73 @@ describe('background session lifecycle, errors, and messages', () => {
     expect(await loadSettings()).toEqual(DEFAULT_SETTINGS);
   });
 
+  it.each([
+    {
+      label: 'custom DNR ID below range',
+      customRules: [{
+        id: 'below-range', dnrId: 10_000, name: 'Below', description: 'Below range',
+        category: 'custom', defaultEnabled: true,
+        matcher: { kind: 'host', host: 'below.cqu.edu.cn' }, transformer: 'atrust-domain',
+      }],
+      excludedHosts: [],
+    },
+    {
+      label: 'custom DNR ID colliding with exclusion range',
+      customRules: [{
+        id: 'exclusion-collision', dnrId: 80_000, name: 'Collision', description: 'Collision',
+        category: 'custom', defaultEnabled: true,
+        matcher: { kind: 'host', host: 'collision.cqu.edu.cn' }, transformer: 'atrust-domain',
+      }],
+      excludedHosts: ['excluded.cqu.edu.cn'],
+    },
+    {
+      label: 'built-in source host duplicate',
+      customRules: [{
+        id: 'built-in-host', dnrId: 10_001, name: 'Duplicate', description: 'Duplicate',
+        category: 'custom', defaultEnabled: true,
+        matcher: { kind: 'host', host: 'SSO.CQU.EDU.CN' }, transformer: 'atrust-domain',
+      }],
+      excludedHosts: [],
+    },
+    {
+      label: 'canonical custom source host duplicate',
+      customRules: [
+        {
+          id: 'first-host', dnrId: 10_001, name: 'First', description: 'First',
+          category: 'custom', defaultEnabled: true,
+          matcher: { kind: 'host', host: 'same.cqu.edu.cn' }, transformer: 'atrust-domain',
+        },
+        {
+          id: 'second-host', dnrId: 10_002, name: 'Second', description: 'Second',
+          category: 'custom', defaultEnabled: true,
+          matcher: { kind: 'host', host: ' SAME.CQU.EDU.CN ' }, transformer: 'atrust-domain',
+        },
+      ],
+      excludedHosts: [],
+    },
+  ])('rejects semantic replacement collision before background dispatch: $label', async ({
+    customRules,
+    excludedHosts,
+  }) => {
+    await saveSettings(DEFAULT_SETTINGS);
+    await startBackground();
+    const storageSet = vi.spyOn(browser.storage.local, 'set');
+
+    await expect(fakeBrowser.runtime.onMessage.trigger({
+      type: 'replace-settings',
+      settings: {
+        enabled: true,
+        disabledBuiltInRuleIds: [],
+        customRules,
+        excludedHosts,
+      },
+      expectedRevision: 1,
+    }, { id: browser.runtime.id })).resolves.toEqual([undefined]);
+
+    expect(storageSet).not.toHaveBeenCalled();
+    expect(await loadSettings()).toEqual(DEFAULT_SETTINGS);
+  });
+
   it('serializes an independent UI replacement with background exclusion and mode persistence', async () => {
     await saveSettings(DEFAULT_SETTINGS);
     const expectedRevision = (await loadSettingsSnapshot()).revision;
@@ -1013,7 +1080,7 @@ describe('background session lifecycle, errors, and messages', () => {
     }).mockImplementation(originalSet);
     const customRule = {
       id: 'ui-custom',
-      dnrId: 9_002,
+      dnrId: 10_001,
       name: 'UI custom',
       description: 'Written from the options client',
       category: 'custom' as const,

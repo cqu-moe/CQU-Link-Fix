@@ -24,6 +24,17 @@ describe('options model', () => {
     expect(model.groups[0]!.rules[0]).toMatchObject({ id: 'core-sso', enabled: false });
   });
 
+  it('keeps a default-disabled built-in disabled without an override', () => {
+    const defaultDisabled = { ...BUILT_IN_RULES[0]!, id: 'default-disabled', defaultEnabled: false };
+
+    const model = buildOptionsModel(DEFAULT_SETTINGS, [defaultDisabled]);
+
+    expect(model.groups[0]!.rules[0]).toMatchObject({
+      id: 'default-disabled',
+      enabled: false,
+    });
+  });
+
   it('removes permission-backed all-CQU state from editable settings', () => {
     const editable = toEditableSettings({
       ...DEFAULT_SETTINGS,

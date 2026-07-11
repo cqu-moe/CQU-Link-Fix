@@ -60,7 +60,7 @@ function mockSendMessage(): MockInstance<SendMessage> {
 function createCustomRule(): CustomRule {
   return {
     id: 'concurrent-custom',
-    dnrId: 3001,
+    dnrId: 10_001,
     name: 'Concurrent custom rule',
     description: 'Test-only concurrent settings mutation',
     category: 'custom',
@@ -160,6 +160,20 @@ describe('settings storage', () => {
     });
   });
 
+  it.each([3, 2, 5])(
+    'rejects successful replacement revision %s when expected revision is 3',
+    async (revision) => {
+      const { enableAllCquDomains: _, ...next } = DEFAULT_SETTINGS;
+      mockSendMessage().mockResolvedValue({ ok: true, revision });
+
+      await expect(replaceSettingsViaBackground(next, 3)).resolves.toEqual({
+        ok: false,
+        code: 'operation-failed',
+        error: 'Background operation failed',
+      });
+    },
+  );
+
   it.each([
     undefined,
     { ok: true },
@@ -232,6 +246,45 @@ describe('settings storage', () => {
     })).toThrow(/matcher kind/i);
   });
 
+  it.each([10_000, 80_000])('rejects custom DNR ID outside the UI allocation range: %s', (dnrId) => {
+    expect(() => validateEditableSettings({
+      enabled: true,
+      disabledBuiltInRuleIds: [],
+      excludedHosts: [],
+      customRules: [{ ...createCustomRule(), dnrId }],
+    })).toThrow(/DNR/i);
+  });
+
+  it('rejects a custom source that duplicates a built-in host', () => {
+    expect(() => validateEditableSettings({
+      enabled: true,
+      disabledBuiltInRuleIds: [],
+      excludedHosts: [],
+      customRules: [{
+        ...createCustomRule(),
+        dnrId: 10_001,
+        matcher: { kind: 'host', host: 'SSO.CQU.EDU.CN' },
+      }],
+    })).toThrow(/built-in|内置/i);
+  });
+
+  it('rejects duplicate canonical custom source hosts', () => {
+    expect(() => validateEditableSettings({
+      enabled: true,
+      disabledBuiltInRuleIds: [],
+      excludedHosts: [],
+      customRules: [
+        { ...createCustomRule(), dnrId: 10_001 },
+        {
+          ...createCustomRule(),
+          id: 'second-custom',
+          dnrId: 10_002,
+          matcher: { kind: 'host', host: ' LIBRARY.CQU.EDU.CN ' },
+        },
+      ],
+    })).toThrow(/host|域名/i);
+  });
+
   it('serializes concurrent mutators without losing fields or hosts', async () => {
     await saveSettings(DEFAULT_SETTINGS);
     const firstStarted = deferred<void>();
@@ -288,13 +341,26 @@ describe('settings storage', () => {
 
   it('enables without prompting when the exact optional origins are already granted', async () => {
     const contains = mockPermissionContains().mockResolvedValue(true);
-    const request = mockPermissionRequest();
+    const request = mockPermissionRequest().mockResolvedValue(true);
 
     await expect(setAllCquMode(true)).resolves.toBe(true);
 
     expect(contains).toHaveBeenCalledWith(CQU_OPTIONAL_ORIGINS);
-    expect(request).not.toHaveBeenCalled();
+    expect(request).toHaveBeenCalledWith(CQU_OPTIONAL_ORIGINS);
     expect((await loadSettings()).enableAllCquDomains).toBe(true);
+  });
+
+  it('invokes the all-CQU permission request before a deferred containment check resolves', async () => {
+    const containment = deferred<boolean>();
+    mockPermissionContains().mockReturnValue(containment.promise);
+    const request = mockPermissionRequest().mockResolvedValue(true);
+
+    const enabling = setAllCquMode(true);
+
+    expect(browser.permissions.contains).toHaveBeenCalledWith(CQU_OPTIONAL_ORIGINS);
+    expect(request).toHaveBeenCalledWith(CQU_OPTIONAL_ORIGINS);
+    containment.resolve(false);
+    await expect(enabling).resolves.toBe(true);
   });
 
   it('requests only the exact optional origins and enables after permission is granted', async () => {
@@ -344,6 +410,7 @@ describe('settings storage', () => {
 
   it('does not write local storage in the permission-caller context', async () => {
     mockPermissionContains().mockResolvedValue(true);
+    mockPermissionRequest().mockResolvedValue(true);
     mockSendMessage().mockResolvedValue({ ok: true, revision: 1 });
     const storageSet = vi.spyOn(browser.storage.local, 'set');
 
