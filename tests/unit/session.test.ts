@@ -106,7 +106,7 @@ function rewriteRecord(overrides: Partial<RewriteRecord> = {}): RewriteRecord {
       'https://sso-cqu-edu-cn-s.atrust.cqu.edu.cn/login?service=https%3A%2F%2Fclient.example%2Fcb#form',
     recordedAt: 123,
     generation: 'test-generation',
-    navigationTime: 1,
+    navigationSequence: 0,
     ...overrides,
   };
 }
@@ -345,6 +345,57 @@ describe('rewrite session state', () => {
     expect(sessionRules.current()).toEqual([collision]);
     expect(await getTabState(7)).toBeNull();
   });
+
+  it('does not delete a newer record when expected bypass ownership is already gone', async () => {
+    const first = rewriteRecord({ generation: 'first' });
+    await recordRewrite(first);
+    const sessionRules = mockSessionRuleStore();
+    mockUpdateTab().mockResolvedValue(undefined);
+    await openOriginalOnce(7);
+    const ownership = (await browser.storage.session.get('bypass:7'))['bypass:7'] as {
+      nonce: string;
+    };
+    await browser.storage.session.remove('bypass:7');
+    const second = rewriteRecord({ generation: 'second', recordedAt: 456 });
+    await recordRewrite(second);
+
+    await clearTabSession(7, ownership.nonce);
+
+    expect(await getTabState(7)).toEqual(second);
+    expect(sessionRules.current()).toHaveLength(1);
+  });
+
+  it.each(['derived ID', 'derived regex'] as const)(
+    'rejects stored bypass ownership with a mismatched %s even when an installed rule matches it',
+    async (kind) => {
+      const record = rewriteRecord();
+      await recordRewrite(record);
+      const sessionRules = mockSessionRuleStore();
+      mockUpdateTab().mockResolvedValue(undefined);
+      await openOriginalOnce(7);
+      const stored = (await browser.storage.session.get('bypass:7'))['bypass:7'] as {
+        rule: { id: number; regexFilter: string };
+      };
+      const [installed] = sessionRules.current();
+      if (kind === 'derived ID') {
+        stored.rule.id += 1;
+        installed!.id += 1;
+      } else {
+        stored.rule.regexFilter = '^https://different.cqu.edu.cn/$';
+        installed!.condition.regexFilter = stored.rule.regexFilter;
+      }
+      await browser.storage.session.set({ 'bypass:7': stored });
+      sessionRules.replace([installed!]);
+
+      await expect(isOriginalBypass(7, record.originalUrl)).resolves.toBe(false);
+    },
+  );
+
+  it('rejects rewrite records whose tab cannot map into the bypass DNR range', async () => {
+    await expect(
+      recordRewrite(rewriteRecord({ tabId: 1_147_483_648 })),
+    ).rejects.toThrow(/tab|record/i);
+  });
 });
 
 describe('background rewrite recording and bypass', () => {
@@ -463,6 +514,22 @@ describe('background rewrite recording and bypass', () => {
 
     expect(updateTab).not.toHaveBeenCalled();
     expect(await getTabState(7)).toMatchObject({ ruleId: 'previous-record' });
+  });
+
+  it('ignores a top-frame navigation whose tab cannot map into the bypass DNR range', async () => {
+    await saveSettings(DEFAULT_SETTINGS);
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const sessionGet = vi.spyOn(browser.storage.session, 'get');
+    await startBackground();
+    sessionGet.mockClear();
+
+    await fakeBrowser.webNavigation.onBeforeNavigate.trigger(
+      navigationDetails('https://sso.cqu.edu.cn/login', { tabId: 1_147_483_648 }),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(sessionGet).not.toHaveBeenCalled();
+    expect(consoleError).not.toHaveBeenCalled();
   });
 
   it('continues a background rewrite when clearing its stale badge fails', async () => {
@@ -709,6 +776,75 @@ describe('background session lifecycle, errors, and messages', () => {
     expect(sessionRules.current()).toHaveLength(1);
   });
 
+  it('removes delayed committed bypass A but preserves newer record generation B', async () => {
+    const first = rewriteRecord({ generation: 'commit-a' });
+    await recordRewrite(first);
+    const sessionRules = mockSessionRuleStore();
+    mockUpdateTab().mockResolvedValue(undefined);
+    await startBackground();
+    await openOriginalOnce(7);
+    const firstRules = sessionRules.current();
+    const delayedCleanupRules = deferred<Browser.declarativeNetRequest.Rule[]>();
+    sessionRules.getRules
+      .mockImplementationOnce(async () => structuredClone(firstRules))
+      .mockReturnValueOnce(delayedCleanupRules.promise);
+
+    await fakeBrowser.webNavigation.onCommitted.trigger(
+      committedDetails(first.originalUrl, { timeStamp: 30 }),
+    );
+    await vi.waitFor(() => expect(sessionRules.getRules).toHaveBeenCalledTimes(3));
+    const second = rewriteRecord({ generation: 'commit-b', recordedAt: 789 });
+    await recordRewrite(second);
+    delayedCleanupRules.resolve(firstRules);
+
+    await vi.waitFor(() => expect(sessionRules.current()).toEqual([]));
+    expect((await browser.storage.session.get('bypass:7'))['bypass:7']).toBeUndefined();
+    expect(await getTabState(7)).toEqual(second);
+  });
+
+  it('removes delayed original-error bypass A but preserves newer record generation B', async () => {
+    const first = rewriteRecord({ generation: 'error-a' });
+    await recordRewrite(first);
+    const sessionRules = mockSessionRuleStore();
+    mockUpdateTab().mockResolvedValue(undefined);
+    await startBackground();
+    await openOriginalOnce(7);
+    const firstRules = sessionRules.current();
+    const delayedCleanupRules = deferred<Browser.declarativeNetRequest.Rule[]>();
+    sessionRules.getRules
+      .mockImplementationOnce(async () => structuredClone(firstRules))
+      .mockReturnValueOnce(delayedCleanupRules.promise);
+
+    await fakeBrowser.webNavigation.onErrorOccurred.trigger(
+      errorDetails(first.originalUrl, { timeStamp: 30 }),
+    );
+    await vi.waitFor(() => expect(sessionRules.getRules).toHaveBeenCalledTimes(3));
+    const second = rewriteRecord({ generation: 'error-b', recordedAt: 790 });
+    await recordRewrite(second);
+    delayedCleanupRules.resolve(firstRules);
+
+    await vi.waitFor(() => expect(sessionRules.current()).toEqual([]));
+    expect((await browser.storage.session.get('bypass:7'))['bypass:7']).toBeUndefined();
+    expect(await getTabState(7)).toEqual(second);
+  });
+
+  it('uses local event sequence so equal browser timestamps cannot restore an old badge', async () => {
+    const record = rewriteRecord({ navigationSequence: 0 });
+    await recordRewrite(record);
+    await startBackground();
+
+    await fakeBrowser.webNavigation.onCommitted.trigger(
+      committedDetails('https://example.com/newer', { timeStamp: 50 }),
+    );
+    await fakeBrowser.webNavigation.onErrorOccurred.trigger(
+      errorDetails(record.targetUrl, { timeStamp: 50 }),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect((await getTabState(7))?.error).toBeUndefined();
+    expect(await browser.action.getBadgeText({ tabId: 7 })).toBe('');
+  });
+
   it('contains synchronous lifecycle badge throws instead of rejecting the listener', async () => {
     await recordRewrite(rewriteRecord());
     vi.spyOn(browser.action, 'setBadgeText').mockImplementation(() => {
@@ -779,6 +915,111 @@ describe('background session lifecycle, errors, and messages', () => {
       ),
     ).resolves.toEqual([{ ok: false, error: expect.any(String) }]);
     expect(consoleError).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { ...DEFAULT_SETTINGS, enabled: 'yes' },
+    { ...DEFAULT_SETTINGS, excludedHosts: ['bad host'] },
+    {
+      ...DEFAULT_SETTINGS,
+      customRules: [{
+        id: 'bad-rule',
+        dnrId: -1,
+        name: 'Bad',
+        description: 'Bad rule',
+        category: 'custom',
+        defaultEnabled: true,
+        matcher: { kind: 'host-port', host: '1.1.1.1', port: 70_000 },
+        transformer: 'atrust-ip-port',
+      }],
+    },
+  ])('returns a typed error for malformed replacement settings without writing: %#', async (settings) => {
+    await saveSettings(DEFAULT_SETTINGS);
+    await startBackground();
+    const storageSet = vi.spyOn(browser.storage.local, 'set');
+
+    await expect(
+      fakeBrowser.runtime.onMessage.trigger(
+        { type: 'replace-settings', settings },
+        { id: browser.runtime.id },
+      ),
+    ).resolves.toEqual([{ ok: false, error: expect.any(String) }]);
+
+    expect(storageSet).not.toHaveBeenCalled();
+    expect(await loadSettings()).toEqual(DEFAULT_SETTINGS);
+  });
+
+  it('serializes an independent UI replacement with background exclusion and mode persistence', async () => {
+    await saveSettings(DEFAULT_SETTINGS);
+    await startBackground();
+    mockGetTab().mockResolvedValue(tab('https://second.cqu.edu.cn/path'));
+    const originalSet = browser.storage.local.set.bind(browser.storage.local) as (
+      items: Record<string, unknown>,
+    ) => Promise<void>;
+    const releaseReplacement = deferred<void>();
+    const storageSet = vi.spyOn(browser.storage.local, 'set');
+    storageSet.mockImplementationOnce(async (items) => {
+      await releaseReplacement.promise;
+      await originalSet(items);
+    }).mockImplementation(originalSet);
+    const customRule = {
+      id: 'ui-custom',
+      dnrId: 9_002,
+      name: 'UI custom',
+      description: 'Written from the options client',
+      category: 'custom' as const,
+      defaultEnabled: true,
+      matcher: { kind: 'host' as const, host: 'other.cqu.edu.cn' },
+      transformer: 'atrust-domain' as const,
+    };
+    const replacement = {
+      ...DEFAULT_SETTINGS,
+      customRules: [customRule],
+      excludedHosts: ['first.cqu.edu.cn'],
+    };
+    const sender = { id: browser.runtime.id };
+
+    const replacing = fakeBrowser.runtime.onMessage.trigger(
+      { type: 'replace-settings', settings: replacement },
+      sender,
+    );
+    await vi.waitFor(() => expect(storageSet).toHaveBeenCalledTimes(1));
+    const excluding = fakeBrowser.runtime.onMessage.trigger(
+      { type: 'exclude-current-host', tabId: 7 },
+      sender,
+    );
+    await vi.waitFor(() => expect(browser.tabs.get).toHaveBeenCalledWith(7));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const settingMode = fakeBrowser.runtime.onMessage.trigger(
+      { type: 'persist-all-cqu-mode', enabled: true },
+      sender,
+    );
+    releaseReplacement.resolve();
+
+    await expect(replacing).resolves.toEqual([{ ok: true }]);
+    await expect(excluding).resolves.toEqual([{ ok: true }]);
+    await expect(settingMode).resolves.toEqual([{ ok: true }]);
+    expect(await loadSettings()).toEqual({
+      ...replacement,
+      enableAllCquDomains: true,
+      excludedHosts: ['first.cqu.edu.cn', 'second.cqu.edu.cn'],
+    });
+  });
+
+  it('ignores settings writes from an untrusted sender', async () => {
+    await saveSettings(DEFAULT_SETTINGS);
+    await startBackground();
+    const storageSet = vi.spyOn(browser.storage.local, 'set');
+
+    await expect(
+      fakeBrowser.runtime.onMessage.trigger(
+        { type: 'replace-settings', settings: { ...DEFAULT_SETTINGS, enabled: false } },
+        { id: 'untrusted-extension' },
+      ),
+    ).resolves.toEqual([undefined]);
+
+    expect(storageSet).not.toHaveBeenCalled();
+    expect(await loadSettings()).toEqual(DEFAULT_SETTINGS);
   });
 });
 

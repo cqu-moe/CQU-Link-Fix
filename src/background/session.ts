@@ -8,7 +8,7 @@ export interface RewriteRecord {
   targetUrl: string;
   recordedAt: number;
   generation: string;
-  navigationTime: number;
+  navigationSequence: number;
   error?: string;
 }
 
@@ -32,6 +32,7 @@ interface OriginalBypass {
 
 const BYPASS_RULE_ID_START = 1_000_000_000;
 const MAX_DNR_RULE_ID = 2_147_483_647;
+export const MAX_BYPASS_TAB_ID = MAX_DNR_RULE_ID - BYPASS_RULE_ID_START;
 const BYPASS_PRIORITY = 1_000_000;
 const MAIN_FRAME: NonNullable<Browser.declarativeNetRequest.RuleCondition['resourceTypes']> = [
   'main_frame',
@@ -46,7 +47,7 @@ function assertTabId(tabId: number): void {
   if (
     !Number.isInteger(tabId) ||
     tabId < 0 ||
-    tabId > MAX_DNR_RULE_ID - BYPASS_RULE_ID_START
+    tabId > MAX_BYPASS_TAB_ID
   ) {
     throw new Error(`Invalid tab ID: ${tabId}`);
   }
@@ -92,6 +93,7 @@ function isRewriteRecord(value: unknown, tabId?: number): value is RewriteRecord
   return (
     Number.isInteger(record.tabId) &&
     (record.tabId as number) >= 0 &&
+    (record.tabId as number) <= MAX_BYPASS_TAB_ID &&
     (tabId === undefined || record.tabId === tabId) &&
     typeof record.ruleId === 'string' &&
     record.ruleId.length > 0 &&
@@ -101,8 +103,8 @@ function isRewriteRecord(value: unknown, tabId?: number): value is RewriteRecord
     Number.isFinite(record.recordedAt) &&
     typeof record.generation === 'string' &&
     record.generation.length > 0 &&
-    typeof record.navigationTime === 'number' &&
-    Number.isFinite(record.navigationTime) &&
+    Number.isInteger(record.navigationSequence) &&
+    (record.navigationSequence as number) >= 0 &&
     (record.error === undefined || typeof record.error === 'string')
   );
 }
@@ -116,6 +118,12 @@ function assertRewriteRecord(record: RewriteRecord): void {
 function isOriginalBypassState(value: unknown, tabId: number): value is OriginalBypass {
   if (!value || typeof value !== 'object') return false;
   const bypass = value as Partial<OriginalBypass>;
+  let expectedRegex: string;
+  try {
+    expectedRegex = `^${escapeRegex(canonicalRequestUrl(bypass.originalRequestUrl ?? ''))}$`;
+  } catch {
+    return false;
+  }
   return (
     bypass.tabId === tabId &&
     typeof bypass.originalRequestUrl === 'string' &&
@@ -124,7 +132,9 @@ function isOriginalBypassState(value: unknown, tabId: number): value is Original
     bypass.recordGeneration.length > 0 &&
     typeof bypass.nonce === 'string' &&
     bypass.nonce.length > 0 &&
-    isBypassRuleIdentity(bypass.rule, tabId)
+    isBypassRuleIdentity(bypass.rule, tabId) &&
+    bypass.rule.id === bypassRuleId(tabId) &&
+    bypass.rule.regexFilter === expectedRegex
   );
 }
 
@@ -348,7 +358,10 @@ async function clearOwnedBypass(
   assertTabId(tabId);
   const bypass = await getOriginalBypass(tabId);
   if (!bypass) {
-    if (removeRecord) await clearRewriteRecord(tabId);
+    if (expectedNonce) return;
+    if (removeRecord) {
+      await browser.storage.session.remove([bypassKey(tabId), recordKey(tabId)]);
+    }
     return;
   }
   if (expectedNonce && bypass.nonce !== expectedNonce) return;
@@ -371,9 +384,13 @@ async function clearOwnedBypass(
 
   const latestAfterRemoval = await getOriginalBypass(tabId);
   if (!latestAfterRemoval || latestAfterRemoval.nonce !== bypass.nonce) return;
-  const keys = [bypassKey(tabId)];
-  if (removeRecord) keys.push(recordKey(tabId));
-  await browser.storage.session.remove(keys);
+  await browser.storage.session.remove(bypassKey(tabId));
+  if (removeRecord) {
+    const currentRecord = await getTabState(tabId);
+    if (currentRecord?.generation === bypass.recordGeneration) {
+      await clearRewriteRecord(tabId);
+    }
+  }
 }
 
 export async function clearTabSession(

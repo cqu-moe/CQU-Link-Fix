@@ -4,6 +4,7 @@ import { fakeBrowser } from 'wxt/testing/fake-browser';
 import {
   DEFAULT_SETTINGS,
   loadSettings,
+  replaceSettingsViaBackground,
   saveSettings,
   setAllCquMode,
   updateSettings,
@@ -18,6 +19,7 @@ type PermissionOperation = (
   permissions: Browser.permissions.Permissions,
 ) => Promise<boolean>;
 type StorageSet = (items: Record<string, unknown>) => Promise<void>;
+type SendMessage = (message: unknown) => Promise<unknown>;
 
 interface Deferred<T> {
   promise: Promise<T>;
@@ -48,6 +50,10 @@ function mockStorageSet(): MockInstance<StorageSet> {
   return vi.spyOn(browser.storage.local, 'set') as unknown as MockInstance<StorageSet>;
 }
 
+function mockSendMessage(): MockInstance<SendMessage> {
+  return vi.spyOn(browser.runtime, 'sendMessage') as unknown as MockInstance<SendMessage>;
+}
+
 function createCustomRule(): CustomRule {
   return {
     id: 'concurrent-custom',
@@ -62,7 +68,20 @@ function createCustomRule(): CustomRule {
 }
 
 describe('settings storage', () => {
-  beforeEach(() => fakeBrowser.reset());
+  beforeEach(() => {
+    fakeBrowser.reset();
+    mockSendMessage().mockImplementation(async (message) => {
+      const candidate = message as { type?: string; enabled?: boolean };
+      if (candidate.type === 'persist-all-cqu-mode' && typeof candidate.enabled === 'boolean') {
+        await updateSettings((current) => ({
+          ...current,
+          enableAllCquDomains: candidate.enabled!,
+        }));
+        return { ok: true };
+      }
+      return { ok: false, error: 'Unexpected test message' };
+    });
+  });
 
   it('round-trips settings through local storage', async () => {
     const next = { ...DEFAULT_SETTINGS, enableAllCquDomains: true };
@@ -109,6 +128,15 @@ describe('settings storage', () => {
     firstLoad.customRules[0]!.matcher.host = 'mutated.example';
 
     expect((await loadSettings()).customRules[0]!.matcher.host).toBe('1.1.1.1');
+  });
+
+  it('exposes a Task 8 client seam that requests complete background replacement', async () => {
+    const next = { ...DEFAULT_SETTINGS, enabled: false };
+    const sendMessage = mockSendMessage().mockResolvedValue({ ok: true });
+
+    await expect(replaceSettingsViaBackground(next)).resolves.toBe(true);
+
+    expect(sendMessage).toHaveBeenCalledWith({ type: 'replace-settings', settings: next });
   });
 
   it('serializes concurrent mutators without losing fields or hosts', async () => {
@@ -183,6 +211,10 @@ describe('settings storage', () => {
     await expect(setAllCquMode(true)).resolves.toBe(true);
 
     expect(request).toHaveBeenCalledWith(CQU_OPTIONAL_ORIGINS);
+    expect(browser.runtime.sendMessage).toHaveBeenCalledWith({
+      type: 'persist-all-cqu-mode',
+      enabled: true,
+    });
     expect((await loadSettings()).enableAllCquDomains).toBe(true);
   });
 
@@ -194,8 +226,37 @@ describe('settings storage', () => {
 
     await expect(setAllCquMode(true)).resolves.toBe(false);
 
+    expect(browser.runtime.sendMessage).toHaveBeenCalledWith({
+      type: 'persist-all-cqu-mode',
+      enabled: false,
+    });
     expect((await loadSettings()).enableAllCquDomains).toBe(false);
     expect(storageSet).toHaveBeenCalled();
+  });
+
+  it('rolls back a newly granted permission when background persistence returns an error', async () => {
+    mockPermissionContains().mockResolvedValue(false);
+    mockPermissionRequest().mockResolvedValue(true);
+    const remove = mockPermissionRemove().mockResolvedValue(true);
+    mockSendMessage().mockResolvedValue({ ok: false, error: 'background unavailable' });
+
+    await expect(setAllCquMode(true)).resolves.toBe(false);
+
+    expect(remove).toHaveBeenCalledWith(CQU_OPTIONAL_ORIGINS);
+    expect(browser.runtime.sendMessage).toHaveBeenCalledWith({
+      type: 'persist-all-cqu-mode',
+      enabled: true,
+    });
+  });
+
+  it('does not write local storage in the permission-caller context', async () => {
+    mockPermissionContains().mockResolvedValue(true);
+    mockSendMessage().mockResolvedValue({ ok: true });
+    const storageSet = vi.spyOn(browser.storage.local, 'set');
+
+    await expect(setAllCquMode(true)).resolves.toBe(true);
+
+    expect(storageSet).not.toHaveBeenCalled();
   });
 
   it.each([
