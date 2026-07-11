@@ -16,6 +16,10 @@ type GetDynamicRules = () => Promise<Browser.declarativeNetRequest.Rule[]>;
 type UpdateDynamicRules = (
   options: Browser.declarativeNetRequest.UpdateRuleOptions,
 ) => Promise<void>;
+type UpdateTab = (
+  tabId: number | undefined,
+  updateProperties: Browser.tabs.UpdateProperties,
+) => Promise<Browser.tabs.Tab | undefined>;
 
 function mockRegexSupport(): MockInstance<RegexSupport> {
   return vi.spyOn(browser.declarativeNetRequest, 'isRegexSupported') as unknown as MockInstance<RegexSupport>;
@@ -27,6 +31,41 @@ function mockGetDynamicRules(): MockInstance<GetDynamicRules> {
 
 function mockUpdateDynamicRules(): MockInstance<UpdateDynamicRules> {
   return vi.spyOn(browser.declarativeNetRequest, 'updateDynamicRules') as unknown as MockInstance<UpdateDynamicRules>;
+}
+
+function mockUpdateTab(): MockInstance<UpdateTab> {
+  return vi.spyOn(browser.tabs, 'update') as unknown as MockInstance<UpdateTab>;
+}
+
+function canonicalRequestUrl(input: string): string {
+  const url = new URL(input);
+  url.hash = '';
+  return url.toString();
+}
+
+function navigationDetails(
+  url: string,
+  overrides: Partial<Browser.webNavigation.WebNavigationBaseCallbackDetails> = {},
+): Browser.webNavigation.WebNavigationBaseCallbackDetails {
+  return {
+    documentLifecycle: 'active',
+    frameId: 0,
+    frameType: 'outermost_frame',
+    parentFrameId: -1,
+    processId: -1,
+    tabId: 7,
+    timeStamp: 1,
+    url,
+    ...overrides,
+  };
+}
+
+async function startBackgroundWithDnrMocks(): Promise<void> {
+  mockRegexSupport().mockResolvedValue({ isSupported: true });
+  mockGetDynamicRules().mockResolvedValue([]);
+  const updateDynamicRules = mockUpdateDynamicRules().mockResolvedValue();
+  background.main!();
+  await vi.waitFor(() => expect(updateDynamicRules).toHaveBeenCalledTimes(1));
 }
 
 function applyRegexRedirect(
@@ -49,7 +88,7 @@ function matchesRegex(rule: Browser.declarativeNetRequest.Rule, input: string): 
   return new RegExp(filter, rule.condition.isUrlFilterCaseSensitive ? '' : 'i').test(input);
 }
 
-function createIpRule(port: number): CustomRule {
+function createIpRule(port: number, host = '1.1.1.1'): CustomRule {
   return {
     id: `custom-ip-${port}`,
     dnrId: 3000 + port,
@@ -57,14 +96,15 @@ function createIpRule(port: number): CustomRule {
     description: 'Test-only registered IP and port pair',
     category: 'custom',
     defaultEnabled: true,
-    matcher: { kind: 'host-port', host: '1.1.1.1', port },
+    matcher: { kind: 'host-port', host, port },
     transformer: 'atrust-ip-port',
   };
 }
 
 describe('DNR compilation', () => {
   it('compiles stable top-level redirect rules for the built-ins', () => {
-    const [sso, youth] = compileDynamicRules(BUILT_IN_RULES, []);
+    const compiled = compileDynamicRules(BUILT_IN_RULES, []);
+    const [sso, youth] = compiled;
 
     expect(sso).toMatchObject({
       id: 1001,
@@ -81,6 +121,7 @@ describe('DNR compilation', () => {
       condition: { resourceTypes: MAIN_FRAME },
       action: { type: 'redirect' },
     });
+    expect(compiled).toHaveLength(2);
     expect(compileDynamicRules(BUILT_IN_RULES, [])).toEqual(
       compileDynamicRules(BUILT_IN_RULES, []),
     );
@@ -90,10 +131,11 @@ describe('DNR compilation', () => {
     const [sso] = compileDynamicRules(BUILT_IN_RULES, []);
     const input =
       'http://sso.cqu.edu.cn:80/login?service=https%3A%2F%2Fone.example%2Fcb&service=https%3A%2F%2Ftwo.example%2Fcb#login';
-    const output = applyRegexRedirect(sso!, input);
+    const requestUrl = canonicalRequestUrl(input);
+    const output = applyRegexRedirect(sso!, requestUrl);
 
     expect(output).toBe(
-      'https://sso-cqu-edu-cn-s.atrust.cqu.edu.cn/login?service=https%3A%2F%2Fone.example%2Fcb&service=https%3A%2F%2Ftwo.example%2Fcb#login',
+      'https://sso-cqu-edu-cn-s.atrust.cqu.edu.cn/login?service=https%3A%2F%2Fone.example%2Fcb&service=https%3A%2F%2Ftwo.example%2Fcb',
     );
     expect(new URL(output!).searchParams.getAll('service')).toEqual(
       new URL(input).searchParams.getAll('service'),
@@ -102,47 +144,79 @@ describe('DNR compilation', () => {
     expect(applyRegexRedirect(sso!, 'https://sso.cqu.edu.cn:444/login')).toBeNull();
   });
 
-  it.each([80, 443, 8000])('requires the exact explicit host-port pair for port %s', (port) => {
+  it.each([
+    [80, 'http://1.1.1.1:80/path?q=1'],
+    [80, 'https://1.1.1.1:80/path?q=1'],
+    [443, 'https://1.1.1.1:443/path?q=1'],
+    [443, 'http://1.1.1.1:443/path?q=1'],
+    [8000, 'http://1.1.1.1:8000/path?q=1'],
+    [8000, 'https://1.1.1.1:8000/path?q=1'],
+  ])('matches canonical request semantics for port %s via %s', (port, input) => {
     const [rule] = compileDynamicRules([createIpRule(port)], []);
 
-    expect(applyRegexRedirect(rule!, `http://1.1.1.1:${port}/path?q=1#details`)).toBe(
-      `https://1-1-1-1-${port}-p.atrust.cqu.edu.cn/path?q=1#details`,
+    expect(applyRegexRedirect(rule!, canonicalRequestUrl(input))).toBe(
+      `https://1-1-1-1-${port}-p.atrust.cqu.edu.cn/path?q=1`,
     );
-    expect(applyRegexRedirect(rule!, 'http://1.1.1.1/path')).toBeNull();
-    expect(applyRegexRedirect(rule!, `http://1.1.1.10:${port}/path`)).toBeNull();
-    expect(applyRegexRedirect(rule!, `http://1.1.1.1:${port + 1}/path`)).toBeNull();
   });
 
-  it('preserves Youth query bytes, decoded protected values, multiplicity, order, and fragment', () => {
-    const rules = compileDynamicRules(BUILT_IN_RULES, []);
-    const youthWithQuery = rules.find((rule) =>
-      rule.condition.regexFilter?.includes('([^#]+)'),
-    );
-    const input =
-      'https://youth.cqu.edu.cn/info/1009/24264.htm?state=first&redirect_uri=https%3a%2f%2fclient.example%2fcb%3fq%3da%2520b&service=https%3A%2F%2Fone.example%2Fcb&state=second&redirect_uri=https%3A%2F%2Ftwo.example%2Fcb&foo=1&foo=2#details';
-    const output = applyRegexRedirect(youthWithQuery!, input);
-    const inputUrl = new URL(input);
-    const outputUrl = new URL(output!);
+  it('distinguishes canonical default ports by scheme', () => {
+    const [httpRule] = compileDynamicRules([createIpRule(80)], []);
+    const [httpsRule] = compileDynamicRules([createIpRule(443)], []);
 
-    expect(output).toBe(
-      'https://youth.cqu.edu.cn/content.jsp?state=first&redirect_uri=https%3a%2f%2fclient.example%2fcb%3fq%3da%2520b&service=https%3A%2F%2Fone.example%2Fcb&state=second&redirect_uri=https%3A%2F%2Ftwo.example%2Fcb&foo=1&foo=2&urltype=news.NewsContentUrl&wbtreeid=1009&wbnewsid=24264#details',
-    );
-    for (const key of ['state', 'redirect_uri', 'service', 'foo']) {
-      expect(outputUrl.searchParams.getAll(key)).toEqual(inputUrl.searchParams.getAll(key));
-    }
-    expect([...outputUrl.searchParams].slice(0, 7)).toEqual([...inputUrl.searchParams]);
+    expect(applyRegexRedirect(httpRule!, canonicalRequestUrl('http://1.1.1.1/path'))).not.toBeNull();
+    expect(applyRegexRedirect(httpRule!, canonicalRequestUrl('https://1.1.1.1/path'))).toBeNull();
+    expect(applyRegexRedirect(httpsRule!, canonicalRequestUrl('https://1.1.1.1/path'))).not.toBeNull();
+    expect(applyRegexRedirect(httpsRule!, canonicalRequestUrl('http://1.1.1.1/path'))).toBeNull();
   });
 
-  it('builds the exact Youth target when no source query exists', () => {
+  it('still rejects wrong hosts and retained non-default ports', () => {
+    const [rule] = compileDynamicRules([createIpRule(8000)], []);
+
+    expect(applyRegexRedirect(rule!, canonicalRequestUrl('http://1.1.1.1/path'))).toBeNull();
+    expect(applyRegexRedirect(rule!, canonicalRequestUrl('http://1.1.1.10:8000/path'))).toBeNull();
+    expect(applyRegexRedirect(rule!, canonicalRequestUrl('http://1.1.1.1:8001/path'))).toBeNull();
+  });
+
+  it.each([
+    'example.com',
+    '127.1',
+    '0x7f000001',
+    '0177.0.0.1',
+    '2130706433',
+    '[::1]',
+    '256.1.1.1',
+    '01.1.1.1',
+    ' 1.1.1.1',
+  ])('rejects non-canonical host-port matcher host %s', (host) => {
+    expect(() => compileDynamicRules([createIpRule(8000, host)], [])).toThrow(
+      'complete canonical IPv4',
+    );
+  });
+
+  it.each([0, 65_536, 1.5, Number.NaN])('rejects invalid host-port matcher port %s', (port) => {
+    expect(() => compileDynamicRules([createIpRule(port)], [])).toThrow('invalid port');
+  });
+
+  it('builds only a queryless Youth request target without assuming DNR sees fragments', () => {
     const youth = compileDynamicRules(BUILT_IN_RULES, [])[1]!;
+    const source = canonicalRequestUrl(
+      'https://youth.cqu.edu.cn/info/1009/24264.htm#print',
+    );
 
-    expect(
-      applyRegexRedirect(youth, 'https://youth.cqu.edu.cn/info/1009/24264.htm#print'),
-    ).toBe(
-      'https://youth.cqu.edu.cn/content.jsp?urltype=news.NewsContentUrl&wbtreeid=1009&wbnewsid=24264#print',
+    expect(applyRegexRedirect(youth, source)).toBe(
+      'https://youth.cqu.edu.cn/content.jsp?urltype=news.NewsContentUrl&wbtreeid=1009&wbnewsid=24264',
     );
     expect(
-      applyRegexRedirect(youth, 'https://youth.cqu.edu.cn.evil.example/info/1009/24264.htm'),
+      applyRegexRedirect(
+        youth,
+        canonicalRequestUrl('https://youth.cqu.edu.cn/info/1009/24264.htm?state=opaque'),
+      ),
+    ).toBeNull();
+    expect(
+      applyRegexRedirect(
+        youth,
+        canonicalRequestUrl('https://youth.cqu.edu.cn.evil.example/info/1009/24264.htm'),
+      ),
     ).toBeNull();
   });
 
@@ -259,5 +333,106 @@ describe('background reconciliation hooks', () => {
       fakeBrowser.storage.onChanged.trigger({ settings: { newValue: {} } }, 'local'),
     ).resolves.toEqual([undefined]);
     await vi.waitFor(() => expect(consoleError).toHaveBeenCalledTimes(3));
+  });
+});
+
+describe('queried Youth navigation routing', () => {
+  beforeEach(() => {
+    fakeBrowser.reset();
+    fakeBrowser.webNavigation.onBeforeNavigate.removeAllListeners();
+  });
+
+  it('uses the hardened Rule Core for conflicts, protected duplicates, raw encoding, and fragments', async () => {
+    await saveSettings(DEFAULT_SETTINGS);
+    const updateTab = mockUpdateTab().mockResolvedValue(undefined);
+    await startBackgroundWithDnrMocks();
+    const input =
+      'https://youth.cqu.edu.cn/info/1009/24264.htm?state=first&urltype=wrong&redirect_uri=https%3a%2f%2fclient.example%2fcb%3fq%3da%2520b&wb%6eewsid=111&foo=1&state=second&wbtreeid=222&service=https%3A%2F%2Fone.example%2Fcb&redirect_uri=https%3A%2F%2Ftwo.example%2Fcb&service=https%3A%2F%2Ftwo.example%2Fcb#details';
+
+    await expect(fakeBrowser.webNavigation.onBeforeNavigate.trigger(navigationDetails(input)))
+      .resolves.toEqual([undefined]);
+    await vi.waitFor(() => expect(updateTab).toHaveBeenCalledTimes(1));
+
+    const target =
+      'https://youth.cqu.edu.cn/content.jsp?state=first&redirect_uri=https%3a%2f%2fclient.example%2fcb%3fq%3da%2520b&foo=1&state=second&service=https%3A%2F%2Fone.example%2Fcb&redirect_uri=https%3A%2F%2Ftwo.example%2Fcb&service=https%3A%2F%2Ftwo.example%2Fcb&urltype=news.NewsContentUrl&wbtreeid=1009&wbnewsid=24264#details';
+    expect(updateTab).toHaveBeenCalledWith(7, { url: target });
+
+    const before = new URL(input);
+    const after = new URL(target);
+    for (const key of ['state', 'redirect_uri', 'service', 'foo']) {
+      expect(after.searchParams.getAll(key)).toEqual(before.searchParams.getAll(key));
+    }
+    expect(after.searchParams.getAll('urltype')).toEqual(['news.NewsContentUrl']);
+    expect(after.searchParams.getAll('wbtreeid')).toEqual(['1009']);
+    expect(after.searchParams.getAll('wbnewsid')).toEqual(['24264']);
+    expect(after.hash).toBe('#details');
+  });
+
+  it('ignores queryless URLs, rewrite targets, subframes, unsupported schemes, and nonmatches', async () => {
+    await saveSettings(DEFAULT_SETTINGS);
+    const updateTab = mockUpdateTab().mockResolvedValue(undefined);
+    await startBackgroundWithDnrMocks();
+
+    const ignored = [
+      navigationDetails('https://youth.cqu.edu.cn/info/1009/24264.htm'),
+      navigationDetails(
+        'https://youth.cqu.edu.cn/content.jsp?urltype=news.NewsContentUrl&wbtreeid=1009&wbnewsid=24264',
+      ),
+      navigationDetails('https://youth.cqu.edu.cn/info/1009/24264.htm?state=x', {
+        frameId: 1,
+        frameType: 'sub_frame',
+        parentFrameId: 0,
+      }),
+      navigationDetails('ftp://youth.cqu.edu.cn/info/1009/24264.htm?state=x'),
+      navigationDetails('https://youth.cqu.edu.cn/info/1009/not-an-article.htm?state=x'),
+      navigationDetails('https://youth.cqu.edu.cn.evil.example/info/1009/24264.htm?state=x'),
+    ];
+
+    for (const details of ignored) {
+      await fakeBrowser.webNavigation.onBeforeNavigate.trigger(details);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(updateTab).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      settings: { ...DEFAULT_SETTINGS, excludedHosts: ['youth.cqu.edu.cn'] },
+      label: 'excluded host',
+    },
+    {
+      settings: { ...DEFAULT_SETTINGS, disabledBuiltInRuleIds: ['addon-youth-public'] },
+      label: 'disabled built-in',
+    },
+  ])('honors the $label setting', async ({ settings }) => {
+    await saveSettings(settings);
+    const updateTab = mockUpdateTab().mockResolvedValue(undefined);
+    await startBackgroundWithDnrMocks();
+
+    await fakeBrowser.webNavigation.onBeforeNavigate.trigger(
+      navigationDetails('https://youth.cqu.edu.cn/info/1009/24264.htm?state=x'),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(updateTab).not.toHaveBeenCalled();
+  });
+
+  it('contains and logs a rejected tab navigation without rejecting the event', async () => {
+    await saveSettings(DEFAULT_SETTINGS);
+    const error = new Error('tab closed');
+    mockUpdateTab().mockRejectedValue(error);
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    await startBackgroundWithDnrMocks();
+
+    await expect(
+      fakeBrowser.webNavigation.onBeforeNavigate.trigger(
+        navigationDetails('https://youth.cqu.edu.cn/info/1009/24264.htm?state=x'),
+      ),
+    ).resolves.toEqual([undefined]);
+    await vi.waitFor(() =>
+      expect(consoleError).toHaveBeenCalledWith(
+        'Failed to rewrite queried Youth navigation',
+        error,
+      ),
+    );
   });
 });

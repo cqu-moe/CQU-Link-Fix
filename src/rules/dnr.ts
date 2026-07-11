@@ -4,7 +4,6 @@ import { getEnabledRules } from './registry';
 import type { RuleDefinition } from './types';
 
 const ALLOW_ID_START = 80_000;
-const YOUTH_QUERY_ID_OFFSET = 40_000;
 const MAX_RULE_ID = 2_147_483_647;
 const MAIN_FRAME: NonNullable<Browser.declarativeNetRequest.RuleCondition['resourceTypes']> = [
   'main_frame',
@@ -30,6 +29,16 @@ function normalizeHost(host: string): string {
   return normalized;
 }
 
+function canonicalIpv4(host: string): string {
+  if (!/^(?:0|[1-9]\d{0,2})(?:\.(?:0|[1-9]\d{0,2})){3}$/.test(host)) {
+    throw new Error(`Host-port matcher requires a complete canonical IPv4: ${host}`);
+  }
+  if (host.split('.').some((octet) => Number(octet) > 255)) {
+    throw new Error(`Host-port matcher requires a complete canonical IPv4: ${host}`);
+  }
+  return host;
+}
+
 function domainTarget(host: string): string {
   return `${host.replaceAll('.', '-')}-s.atrust.cqu.edu.cn`;
 }
@@ -37,6 +46,13 @@ function domainTarget(host: string): string {
 function defaultPortAuthority(host: string): string {
   const escapedHost = escapeRegex(host);
   return `(?:http://${escapedHost}(?::80)?|https://${escapedHost}(?::443)?)`;
+}
+
+function hostPortAuthority(host: string, port: number): string {
+  const escapedHost = escapeRegex(host);
+  if (port === 80) return `(?:http://${escapedHost}|https://${escapedHost}:80)`;
+  if (port === 443) return `(?:https://${escapedHost}|http://${escapedHost}:443)`;
+  return `https?://${escapedHost}:${port}`;
 }
 
 function redirectRule(
@@ -59,48 +75,45 @@ function redirectRule(
 
 function compileRedirects(rule: RuleDefinition): Browser.declarativeNetRequest.Rule[] {
   const matcher = rule.matcher;
-  const host = normalizeHost(matcher.host);
   const priority = rule.category === 'custom' ? 30_000 : 10_000;
 
   if (matcher.kind === 'host') {
+    const host = normalizeHost(matcher.host);
     return [
       redirectRule(
         rule.dnrId,
         priority,
-        `^${defaultPortAuthority(host)}((?:[/?#].*)?)$`,
+        `^${defaultPortAuthority(host)}((?:[/?].*)?)$`,
         `https://${domainTarget(host)}\\1`,
       ),
     ];
   }
 
   if (matcher.kind === 'host-port') {
+    const host = canonicalIpv4(matcher.host);
+    if (!Number.isInteger(matcher.port) || matcher.port < 1 || matcher.port > 65_535) {
+      throw new Error(`Host-port matcher has an invalid port: ${matcher.port}`);
+    }
     const encoded = `${host.replaceAll('.', '-')}-${matcher.port}-p.atrust.cqu.edu.cn`;
     return [
       redirectRule(
         rule.dnrId,
         priority,
-        `^https?://${escapeRegex(host)}:${matcher.port}((?:[/?#].*)?)$`,
+        `^${hostPortAuthority(host, matcher.port)}((?:[/?].*)?)$`,
         `https://${encoded}\\1`,
       ),
     ];
   }
 
+  const host = normalizeHost(matcher.host);
   const authority = defaultPortAuthority(host);
   const target = `https://${host}/content.jsp`;
-  const queryRuleId = rule.dnrId + YOUTH_QUERY_ID_OFFSET;
-  if (queryRuleId > MAX_RULE_ID) throw new Error(`DNR rule ID is too large: ${rule.dnrId}`);
   return [
     redirectRule(
       rule.dnrId,
       20_000,
-      `^${authority}/info/(\\d+)/(\\d+)\\.htm(#.*)?$`,
-      `${target}?urltype=news.NewsContentUrl&wbtreeid=\\1&wbnewsid=\\2\\3`,
-    ),
-    redirectRule(
-      queryRuleId,
-      20_000,
-      `^${authority}/info/(\\d+)/(\\d+)\\.htm\\?([^#]+)(#.*)?$`,
-      `${target}?\\3&urltype=news.NewsContentUrl&wbtreeid=\\1&wbnewsid=\\2\\4`,
+      `^${authority}/info/(\\d+)/(\\d+)\\.htm$`,
+      `${target}?urltype=news.NewsContentUrl&wbtreeid=\\1&wbnewsid=\\2`,
     ),
   ];
 }
@@ -112,7 +125,7 @@ function compileAllows(excludedHosts: readonly string[]): Browser.declarativeNet
     priority: 100_000,
     action: { type: 'allow' },
     condition: {
-      regexFilter: `^https?://${escapeRegex(host)}(?::\\d+)?(?:[/?#]|$)`,
+      regexFilter: `^https?://${escapeRegex(host)}(?::\\d+)?(?:[/?]|$)`,
       isUrlFilterCaseSensitive: false,
       resourceTypes: MAIN_FRAME,
     },
