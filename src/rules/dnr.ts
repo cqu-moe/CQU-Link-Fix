@@ -73,9 +73,15 @@ function redirectRule(
   };
 }
 
+export function getRulePriority(rule: RuleDefinition): number {
+  if (rule.category === 'custom') return 30_000;
+  if (rule.matcher.kind === 'youth-article') return 20_000;
+  return 10_000;
+}
+
 function compileRedirects(rule: RuleDefinition): Browser.declarativeNetRequest.Rule[] {
   const matcher = rule.matcher;
-  const priority = rule.category === 'custom' ? 30_000 : 10_000;
+  const priority = getRulePriority(rule);
 
   if (matcher.kind === 'host') {
     const host = normalizeHost(matcher.host);
@@ -111,7 +117,7 @@ function compileRedirects(rule: RuleDefinition): Browser.declarativeNetRequest.R
   return [
     redirectRule(
       rule.dnrId,
-      20_000,
+      priority,
       `^${authority}/info/(\\d+)/(\\d+)\\.htm$`,
       `${target}?urltype=news.NewsContentUrl&wbtreeid=\\1&wbnewsid=\\2`,
     ),

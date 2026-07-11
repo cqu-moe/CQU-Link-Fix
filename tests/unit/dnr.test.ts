@@ -3,9 +3,13 @@ import { beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest'
 import { fakeBrowser } from 'wxt/testing/fake-browser';
 import background from '../../entrypoints/background';
 import { BUILT_IN_RULES } from '../../src/rules/builtins';
-import { compileDynamicRules, reconcileDynamicRules } from '../../src/rules/dnr';
+import {
+  compileDynamicRules,
+  getRulePriority,
+  reconcileDynamicRules,
+} from '../../src/rules/dnr';
 import { DEFAULT_SETTINGS, saveSettings } from '../../src/storage/settings';
-import type { CustomRule } from '../../src/rules/types';
+import type { CustomRule, RuleDefinition } from '../../src/rules/types';
 
 const MAIN_FRAME = ['main_frame'] as const;
 
@@ -20,6 +24,14 @@ type UpdateTab = (
   tabId: number | undefined,
   updateProperties: Browser.tabs.UpdateProperties,
 ) => Promise<Browser.tabs.Tab | undefined>;
+type StorageGet = (
+  keys?: string | string[] | Record<string, unknown> | null,
+) => Promise<Record<string, unknown>>;
+
+interface Deferred<T> {
+  promise: Promise<T>;
+  resolve: (value: T) => void;
+}
 
 function mockRegexSupport(): MockInstance<RegexSupport> {
   return vi.spyOn(browser.declarativeNetRequest, 'isRegexSupported') as unknown as MockInstance<RegexSupport>;
@@ -35,6 +47,18 @@ function mockUpdateDynamicRules(): MockInstance<UpdateDynamicRules> {
 
 function mockUpdateTab(): MockInstance<UpdateTab> {
   return vi.spyOn(browser.tabs, 'update') as unknown as MockInstance<UpdateTab>;
+}
+
+function mockStorageGet(): MockInstance<StorageGet> {
+  return vi.spyOn(browser.storage.local, 'get') as unknown as MockInstance<StorageGet>;
+}
+
+function deferred<T>(): Deferred<T> {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((next) => {
+    resolve = next;
+  });
+  return { promise, resolve };
 }
 
 function canonicalRequestUrl(input: string): string {
@@ -101,7 +125,44 @@ function createIpRule(port: number, host = '1.1.1.1'): CustomRule {
   };
 }
 
+function createYouthHostRule(): CustomRule {
+  return {
+    id: 'custom-youth-host',
+    dnrId: 10_001,
+    name: 'Youth through aTrust',
+    description: 'Test-only higher-priority Youth host redirect',
+    category: 'custom',
+    defaultEnabled: true,
+    matcher: { kind: 'host', host: 'youth.cqu.edu.cn' },
+    transformer: 'atrust-domain',
+  };
+}
+
+function createCustomYouthArticleRule(): CustomRule {
+  return {
+    id: 'custom-youth-article',
+    dnrId: 10_000,
+    name: 'Custom Youth public link',
+    description: 'Test-only deferred Youth article redirect',
+    category: 'custom',
+    defaultEnabled: true,
+    matcher: { kind: 'youth-article', host: 'youth.cqu.edu.cn' },
+    transformer: 'youth-public',
+  };
+}
+
 describe('DNR compilation', () => {
+  it('uses one precedence function for custom, Youth, and other rules', () => {
+    const core = BUILT_IN_RULES[0]!;
+    const youth = BUILT_IN_RULES[1]!;
+    const important: RuleDefinition = { ...core, id: 'important', category: 'important' };
+
+    expect(getRulePriority(createIpRule(8000))).toBe(30_000);
+    expect(getRulePriority(youth)).toBe(20_000);
+    expect(getRulePriority(core)).toBe(10_000);
+    expect(getRulePriority(important)).toBe(10_000);
+  });
+
   it('compiles stable top-level redirect rules for the built-ins', () => {
     const compiled = compileDynamicRules(BUILT_IN_RULES, []);
     const [sso, youth] = compiled;
@@ -366,6 +427,110 @@ describe('queried Youth navigation routing', () => {
     expect(after.searchParams.getAll('wbtreeid')).toEqual(['1009']);
     expect(after.searchParams.getAll('wbnewsid')).toEqual(['24264']);
     expect(after.hash).toBe('#details');
+  });
+
+  it('leaves a queried Youth URL to a higher-priority custom host DNR rule', async () => {
+    await saveSettings({ ...DEFAULT_SETTINGS, customRules: [createYouthHostRule()] });
+    const updateTab = mockUpdateTab().mockResolvedValue(undefined);
+    await startBackgroundWithDnrMocks();
+
+    await fakeBrowser.webNavigation.onBeforeNavigate.trigger(
+      navigationDetails('https://youth.cqu.edu.cn/info/1009/24264.htm?state=x'),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(updateTab).not.toHaveBeenCalled();
+  });
+
+  it('prefers a DNR-applicable rule over a deferred Youth rule at equal priority', async () => {
+    await saveSettings({
+      ...DEFAULT_SETTINGS,
+      customRules: [createCustomYouthArticleRule(), createYouthHostRule()],
+      disabledBuiltInRuleIds: ['addon-youth-public'],
+    });
+    const updateTab = mockUpdateTab().mockResolvedValue(undefined);
+    await startBackgroundWithDnrMocks();
+
+    await fakeBrowser.webNavigation.onBeforeNavigate.trigger(
+      navigationDetails('https://youth.cqu.edu.cn/info/1009/24264.htm?state=x'),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(updateTab).not.toHaveBeenCalled();
+  });
+
+  it('restores queried Youth fallback when the custom host rule is disabled', async () => {
+    const customRule = createYouthHostRule();
+    await saveSettings({
+      ...DEFAULT_SETTINGS,
+      customRules: [customRule],
+      disabledBuiltInRuleIds: [customRule.id],
+    });
+    const updateTab = mockUpdateTab().mockResolvedValue(undefined);
+    await startBackgroundWithDnrMocks();
+    const input = 'https://youth.cqu.edu.cn/info/1009/24264.htm?state=x';
+
+    await fakeBrowser.webNavigation.onBeforeNavigate.trigger(navigationDetails(input));
+    await vi.waitFor(() => expect(updateTab).toHaveBeenCalledTimes(1));
+    expect(updateTab).toHaveBeenCalledWith(7, {
+      url: 'https://youth.cqu.edu.cn/content.jsp?state=x&urltype=news.NewsContentUrl&wbtreeid=1009&wbnewsid=24264',
+    });
+  });
+
+  it('does not let a stale queried Youth completion overwrite a newer top-frame navigation', async () => {
+    await saveSettings(DEFAULT_SETTINGS);
+    const updateTab = mockUpdateTab().mockResolvedValue(undefined);
+    await startBackgroundWithDnrMocks();
+    const pendingSettings = deferred<Record<string, unknown>>();
+    const storageGet = mockStorageGet().mockReturnValueOnce(pendingSettings.promise);
+
+    await fakeBrowser.webNavigation.onBeforeNavigate.trigger(
+      navigationDetails('https://youth.cqu.edu.cn/info/1009/24264.htm?state=old'),
+    );
+    expect(storageGet).toHaveBeenCalledTimes(1);
+    await fakeBrowser.webNavigation.onBeforeNavigate.trigger(
+      navigationDetails('https://example.com/newer'),
+    );
+
+    pendingSettings.resolve({ settings: DEFAULT_SETTINGS });
+    await pendingSettings.promise;
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(updateTab).not.toHaveBeenCalled();
+  });
+
+  it('updates when a deferred queried Youth navigation is still current', async () => {
+    await saveSettings(DEFAULT_SETTINGS);
+    const updateTab = mockUpdateTab().mockResolvedValue(undefined);
+    await startBackgroundWithDnrMocks();
+    const pendingSettings = deferred<Record<string, unknown>>();
+    const storageGet = mockStorageGet().mockReturnValueOnce(pendingSettings.promise);
+    const input = 'https://youth.cqu.edu.cn/info/1009/24264.htm?state=current';
+
+    await fakeBrowser.webNavigation.onBeforeNavigate.trigger(navigationDetails(input));
+    expect(storageGet).toHaveBeenCalledTimes(1);
+    pendingSettings.resolve({ settings: DEFAULT_SETTINGS });
+
+    await vi.waitFor(() => expect(updateTab).toHaveBeenCalledTimes(1));
+    expect(updateTab).toHaveBeenCalledWith(7, {
+      url: 'https://youth.cqu.edu.cn/content.jsp?state=current&urltype=news.NewsContentUrl&wbtreeid=1009&wbnewsid=24264',
+    });
+  });
+
+  it('invalidates a deferred queried Youth navigation when its tab closes', async () => {
+    await saveSettings(DEFAULT_SETTINGS);
+    const updateTab = mockUpdateTab().mockResolvedValue(undefined);
+    await startBackgroundWithDnrMocks();
+    const pendingSettings = deferred<Record<string, unknown>>();
+    mockStorageGet().mockReturnValueOnce(pendingSettings.promise);
+
+    await fakeBrowser.webNavigation.onBeforeNavigate.trigger(
+      navigationDetails('https://youth.cqu.edu.cn/info/1009/24264.htm?state=closing'),
+    );
+    await fakeBrowser.tabs.onRemoved.trigger(7, { isWindowClosing: false, windowId: 1 });
+    pendingSettings.resolve({ settings: DEFAULT_SETTINGS });
+    await pendingSettings.promise;
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(updateTab).not.toHaveBeenCalled();
   });
 
   it('ignores queryless URLs, rewrite targets, subframes, unsupported schemes, and nonmatches', async () => {
