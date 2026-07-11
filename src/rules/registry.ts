@@ -8,10 +8,11 @@ const EXPLICIT_PORT = /^[a-z][a-z\d+.-]*:\/\/[^/?#]*:(\d+)(?=[/?#]|$)/i;
 export function getEnabledRules(settings: ExtensionSettings): RuleDefinition[] {
   if (!settings.enabled) return [];
   const disabled = new Set(settings.disabledBuiltInRuleIds);
-  return [
+  const enabledRules = [
     ...BUILT_IN_RULES.filter((rule) => rule.defaultEnabled && !disabled.has(rule.id)),
     ...settings.customRules.filter((rule) => !disabled.has(rule.id)),
   ];
+  return structuredClone(enabledRules);
 }
 
 export function decideRegisteredRewrite(

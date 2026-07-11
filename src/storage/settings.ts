@@ -24,12 +24,7 @@ export async function loadSettings(): Promise<ExtensionSettings> {
     ...DEFAULT_SETTINGS,
     ...(stored[SETTINGS_KEY] as Partial<ExtensionSettings> | undefined),
   };
-  return {
-    ...merged,
-    disabledBuiltInRuleIds: [...merged.disabledBuiltInRuleIds],
-    customRules: [...merged.customRules],
-    excludedHosts: [...merged.excludedHosts],
-  };
+  return structuredClone(merged);
 }
 
 export async function saveSettings(next: ExtensionSettings): Promise<void> {

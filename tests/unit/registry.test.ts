@@ -6,11 +6,38 @@ import type { CustomRule } from '../../src/rules/types';
 
 describe('rule registry', () => {
   it('ships stable default built-ins', () => {
-    expect(BUILT_IN_RULES.map((rule) => rule.id)).toEqual(['core-sso', 'addon-youth-public']);
+    expect(BUILT_IN_RULES.map(({ id, dnrId }) => [id, dnrId])).toEqual([
+      ['core-sso', 1001],
+      ['addon-youth-public', 2001],
+    ]);
     expect(getEnabledRules(DEFAULT_SETTINGS).map((rule) => rule.id)).toEqual([
       'core-sso',
       'addon-youth-public',
     ]);
+  });
+
+  it('uses unique numeric DNR IDs for built-ins', () => {
+    const dnrIds = BUILT_IN_RULES.map((rule) => rule.dnrId);
+    expect(dnrIds.every((dnrId) => Number.isInteger(dnrId))).toBe(true);
+    expect(new Set(dnrIds).size).toBe(dnrIds.length);
+  });
+
+  it('does not expose canonical built-in rule objects to callers', () => {
+    const enabledRule = getEnabledRules(DEFAULT_SETTINGS)[0]!;
+    const originalName = enabledRule.name;
+    const originalHost = enabledRule.matcher.host;
+
+    try {
+      enabledRule.name = 'mutated';
+      enabledRule.matcher.host = 'mutated.example';
+
+      const subsequentRule = getEnabledRules(DEFAULT_SETTINGS)[0]!;
+      expect(subsequentRule.name).toBe(originalName);
+      expect(subsequentRule.matcher.host).toBe(originalHost);
+    } finally {
+      enabledRule.name = originalName;
+      enabledRule.matcher.host = originalHost;
+    }
   });
 
   it('honors a disabled built-in', () => {
