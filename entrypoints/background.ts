@@ -1,4 +1,5 @@
 import type { Browser } from 'wxt/browser';
+import { decideAllCquRewrite } from '../src/background/navigation';
 import { decideRegisteredRewrite, getEnabledRules } from '../src/rules/registry';
 import { getRulePriority, reconcileDynamicRules } from '../src/rules/dnr';
 import type { RuleDefinition } from '../src/rules/types';
@@ -15,7 +16,7 @@ function scheduleReconciliation(): void {
     });
 }
 
-function compareQueriedNavigationPrecedence(
+function compareNavigationPrecedence(
   left: RuleDefinition,
   right: RuleDefinition,
 ): number {
@@ -28,7 +29,15 @@ function compareQueriedNavigationPrecedence(
   return left.dnrId - right.dnrId || left.id.localeCompare(right.id);
 }
 
-async function rewriteQueriedYouthNavigation(
+function isExcludedHost(host: string, excludedHosts: readonly string[]): boolean {
+  return excludedHosts.some((excluded) => excluded.trim().toLowerCase() === host);
+}
+
+function isHandledByDnr(rule: RuleDefinition, url: URL): boolean {
+  return rule.matcher.kind !== 'youth-article' || !url.search;
+}
+
+async function rewriteTopFrameNavigation(
   details: Browser.webNavigation.WebNavigationBaseCallbackDetails,
   navigationToken: symbol,
 ): Promise<void> {
@@ -42,41 +51,47 @@ async function rewriteQueriedYouthNavigation(
   }
   if (
     (url.protocol !== 'http:' && url.protocol !== 'https:') ||
-    url.hostname.toLowerCase() !== 'youth.cqu.edu.cn' ||
-    !/^\/info\/\d+\/\d+\.htm$/.test(url.pathname) ||
-    !url.search
+    url.username ||
+    url.password
   ) {
     return;
   }
 
   const settings = await loadSettings();
   const host = url.hostname.toLowerCase();
-  if (settings.excludedHosts.some((excluded) => excluded.trim().toLowerCase() === host)) return;
+  if (isExcludedHost(host, settings.excludedHosts)) return;
 
-  const enabledRules = getEnabledRules(settings).sort(compareQueriedNavigationPrecedence);
+  const enabledRules = getEnabledRules(settings).sort(compareNavigationPrecedence);
   const decision = decideRegisteredRewrite(details.url, enabledRules);
   const winningRule = enabledRules.find((rule) => rule.id === decision?.ruleId);
-  if (
-    !decision ||
-    winningRule?.matcher.kind !== 'youth-article' ||
-    winningRule.transformer !== 'youth-public' ||
-    decision.targetUrl === details.url
-  ) {
-    return;
+  let target: string | null = null;
+
+  if (decision && winningRule) {
+    if (isHandledByDnr(winningRule, url)) return;
+    if (
+      winningRule.matcher.kind === 'youth-article' &&
+      winningRule.transformer === 'youth-public'
+    ) {
+      target = decision.targetUrl;
+    }
+  } else {
+    target = decideAllCquRewrite(details, settings);
   }
+
+  if (!target || target === details.url) return;
   if (latestTopFrameNavigation.get(details.tabId) !== navigationToken) return;
-  await browser.tabs.update(details.tabId, { url: decision.targetUrl });
+  await browser.tabs.update(details.tabId, { url: target });
 }
 
-function scheduleQueriedYouthRewrite(
+function scheduleTopFrameRewrite(
   details: Browser.webNavigation.WebNavigationBaseCallbackDetails,
 ): void {
   if (details.frameId !== 0 || details.tabId < 0) return;
   const navigationToken = Symbol('top-frame-navigation');
   latestTopFrameNavigation.set(details.tabId, navigationToken);
-  void rewriteQueriedYouthNavigation(details, navigationToken)
+  void rewriteTopFrameNavigation(details, navigationToken)
     .catch((error: unknown) => {
-      console.error('Failed to rewrite queried Youth navigation', error);
+      console.error('Failed to rewrite top-frame navigation', error);
     })
     .finally(() => {
       if (latestTopFrameNavigation.get(details.tabId) === navigationToken) {
@@ -91,6 +106,6 @@ export default defineBackground(() => {
   browser.storage.onChanged.addListener((changes, areaName) => {
     if (areaName === 'local' && changes.settings) scheduleReconciliation();
   });
-  browser.webNavigation.onBeforeNavigate.addListener(scheduleQueriedYouthRewrite);
+  browser.webNavigation.onBeforeNavigate.addListener(scheduleTopFrameRewrite);
   browser.tabs.onRemoved.addListener((tabId) => latestTopFrameNavigation.delete(tabId));
 });

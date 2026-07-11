@@ -436,7 +436,11 @@ describe('queried Youth navigation routing', () => {
   });
 
   it('leaves a queried Youth URL to a higher-priority custom host DNR rule', async () => {
-    await saveSettings({ ...DEFAULT_SETTINGS, customRules: [createYouthHostRule()] });
+    await saveSettings({
+      ...DEFAULT_SETTINGS,
+      enableAllCquDomains: true,
+      customRules: [createYouthHostRule()],
+    });
     const updateTab = mockUpdateTab().mockResolvedValue(undefined);
     await startBackgroundWithDnrMocks();
 
@@ -601,9 +605,98 @@ describe('queried Youth navigation routing', () => {
     ).resolves.toEqual([undefined]);
     await vi.waitFor(() =>
       expect(consoleError).toHaveBeenCalledWith(
-        'Failed to rewrite queried Youth navigation',
+        'Failed to rewrite top-frame navigation',
         error,
       ),
     );
+  });
+});
+
+describe('unified top-frame navigation routing', () => {
+  beforeEach(() => {
+    fakeBrowser.reset();
+    fakeBrowser.webNavigation.onBeforeNavigate.removeAllListeners();
+  });
+
+  it('registers exactly one navigation listener synchronously at startup', () => {
+    mockRegexSupport().mockResolvedValue({ isSupported: true });
+    mockGetDynamicRules().mockResolvedValue([]);
+    mockUpdateDynamicRules().mockResolvedValue();
+    const addListener = vi.spyOn(browser.webNavigation.onBeforeNavigate, 'addListener');
+
+    background.main!();
+
+    expect(addListener).toHaveBeenCalledTimes(1);
+    expect(browser.webNavigation.onBeforeNavigate.hasListeners()).toBe(true);
+  });
+
+  it('uses the all-CQU rewrite only as the fallback and performs one tab update', async () => {
+    await saveSettings({ ...DEFAULT_SETTINGS, enableAllCquDomains: true });
+    const updateTab = mockUpdateTab().mockResolvedValue(undefined);
+    await startBackgroundWithDnrMocks();
+
+    await expect(
+      fakeBrowser.webNavigation.onBeforeNavigate.trigger(
+        navigationDetails('https://library.cqu.edu.cn/a?q=1#part'),
+      ),
+    ).resolves.toEqual([undefined]);
+    await vi.waitFor(() => expect(updateTab).toHaveBeenCalledTimes(1));
+
+    expect(updateTab).toHaveBeenCalledWith(7, {
+      url: 'https://library-cqu-edu-cn-s.atrust.cqu.edu.cn/a?q=1#part',
+    });
+  });
+
+  it.each([
+    ['SSO DNR', 'https://sso.cqu.edu.cn/login?service=https%3A%2F%2Fclient.example%2Fcb'],
+    ['queryless Youth DNR', 'https://youth.cqu.edu.cn/info/1009/24264.htm'],
+  ])('does not compete with the $label rule', async (_label, url) => {
+    await saveSettings({ ...DEFAULT_SETTINGS, enableAllCquDomains: true });
+    const updateTab = mockUpdateTab().mockResolvedValue(undefined);
+    await startBackgroundWithDnrMocks();
+
+    await fakeBrowser.webNavigation.onBeforeNavigate.trigger(navigationDetails(url));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(updateTab).not.toHaveBeenCalled();
+  });
+
+  it('lets the queried-Youth Rule Core win over all-CQU without a competing update', async () => {
+    await saveSettings({ ...DEFAULT_SETTINGS, enableAllCquDomains: true });
+    const updateTab = mockUpdateTab().mockResolvedValue(undefined);
+    await startBackgroundWithDnrMocks();
+
+    await fakeBrowser.webNavigation.onBeforeNavigate.trigger(
+      navigationDetails('https://youth.cqu.edu.cn/info/1009/24264.htm?state=x'),
+    );
+    await vi.waitFor(() => expect(updateTab).toHaveBeenCalledTimes(1));
+
+    expect(updateTab).toHaveBeenCalledWith(7, {
+      url: 'https://youth.cqu.edu.cn/content.jsp?state=x&urltype=news.NewsContentUrl&wbtreeid=1009&wbnewsid=24264',
+    });
+  });
+
+  it('invalidates delayed all-CQU work when a newer top-frame navigation arrives', async () => {
+    await saveSettings({ ...DEFAULT_SETTINGS, enableAllCquDomains: true });
+    const updateTab = mockUpdateTab().mockResolvedValue(undefined);
+    await startBackgroundWithDnrMocks();
+    const pendingSettings = deferred<Record<string, unknown>>();
+    const storageGet = mockStorageGet().mockReturnValueOnce(pendingSettings.promise);
+
+    await fakeBrowser.webNavigation.onBeforeNavigate.trigger(
+      navigationDetails('https://library.cqu.edu.cn/old'),
+    );
+    expect(storageGet).toHaveBeenCalledTimes(1);
+    await fakeBrowser.webNavigation.onBeforeNavigate.trigger(
+      navigationDetails('https://example.com/newer'),
+    );
+
+    pendingSettings.resolve({
+      settings: { ...DEFAULT_SETTINGS, enableAllCquDomains: true },
+    });
+    await pendingSettings.promise;
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(updateTab).not.toHaveBeenCalled();
   });
 });
