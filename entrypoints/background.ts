@@ -262,12 +262,14 @@ function handleRuntimeMessage(
   message: unknown,
   sender: Browser.runtime.MessageSender,
 ): Promise<BackgroundResponse> | undefined {
+  const isExtensionPage = typeof sender.url === 'string' &&
+    sender.url.startsWith(browser.runtime.getURL(''));
   if (
     !isBackgroundMessage(message) ||
     sender.id !== browser.runtime.id ||
     ('tabId' in message
-      ? sender.tab !== undefined && sender.tab.id !== message.tabId
-      : sender.tab !== undefined)
+      ? sender.tab !== undefined && sender.tab.id !== message.tabId && !isExtensionPage
+      : sender.tab !== undefined && !isExtensionPage)
   ) {
     return undefined;
   }

@@ -1,7 +1,11 @@
-import { defineConfig } from 'vitest/config';
+import { configDefaults, defineConfig } from 'vitest/config';
 import { WxtVitest } from 'wxt/testing/vitest-plugin';
 
 export default defineConfig({
   plugins: [WxtVitest()],
-  test: { environment: 'happy-dom', restoreMocks: true },
+  test: {
+    environment: 'happy-dom',
+    restoreMocks: true,
+    exclude: [...configDefaults.exclude, 'tests/e2e/**'],
+  },
 });

@@ -30,6 +30,7 @@ interface OriginalBypass {
 
 const BYPASS_RULE_ID_START = 1_000_000_000;
 const MAX_DNR_RULE_ID = 2_147_483_647;
+const BYPASS_RULE_ID_CAPACITY = MAX_DNR_RULE_ID - BYPASS_RULE_ID_START + 1;
 export const MAX_BYPASS_TAB_ID = MAX_REWRITE_TAB_ID;
 const BYPASS_PRIORITY = 1_000_000;
 const MAIN_FRAME: NonNullable<Browser.declarativeNetRequest.RuleCondition['resourceTypes']> = [
@@ -51,11 +52,22 @@ function assertTabId(tabId: number): void {
   }
 }
 
-function bypassRuleId(tabId: number): number {
+function firstBypassRuleId(tabId: number): number {
   assertTabId(tabId);
-  const id = BYPASS_RULE_ID_START + tabId;
-  if (id > MAX_DNR_RULE_ID) throw new Error(`Tab ID is outside the bypass rule range: ${tabId}`);
-  return id;
+  return BYPASS_RULE_ID_START + (tabId % BYPASS_RULE_ID_CAPACITY);
+}
+
+function allocateBypassRuleId(
+  tabId: number,
+  rules: readonly Browser.declarativeNetRequest.Rule[],
+): number {
+  const occupied = new Set(rules.map((rule) => rule.id));
+  let candidate = firstBypassRuleId(tabId);
+  for (let attempts = 0; attempts <= occupied.size; attempts += 1) {
+    if (!occupied.has(candidate)) return candidate;
+    candidate = candidate === MAX_DNR_RULE_ID ? BYPASS_RULE_ID_START : candidate + 1;
+  }
+  throw new Error('No session DNR rule ID is available for the original bypass');
 }
 
 function assertRewriteRecord(record: RewriteRecord): void {
@@ -69,7 +81,7 @@ function isOriginalBypassState(value: unknown, tabId: number): value is Original
   const bypass = value as Partial<OriginalBypass>;
   let expectedRegex: string;
   try {
-    expectedRegex = `^${escapeRegex(canonicalRequestUrl(bypass.originalRequestUrl ?? ''))}$`;
+    expectedRegex = `^${escapeRegex(canonicalRequestUrl(bypass.originalRequestUrl ?? ''))}(?:#.*)?$`;
   } catch {
     return false;
   }
@@ -82,7 +94,8 @@ function isOriginalBypassState(value: unknown, tabId: number): value is Original
     typeof bypass.nonce === 'string' &&
     bypass.nonce.length > 0 &&
     isBypassRuleIdentity(bypass.rule, tabId) &&
-    bypass.rule.id === bypassRuleId(tabId) &&
+    bypass.rule.id >= BYPASS_RULE_ID_START &&
+    bypass.rule.id <= MAX_DNR_RULE_ID &&
     bypass.rule.regexFilter === expectedRegex
   );
 }
@@ -188,25 +201,21 @@ export async function openOriginalOnce(tabId: number): Promise<void> {
   if (!record) throw new Error('No rewrite is recorded for this tab');
 
   const originalRequestUrl = canonicalRequestUrl(record.originalUrl);
-  const id = bypassRuleId(tabId);
   const previousBypass = await getOriginalBypass(tabId);
-  const existing = (await browser.declarativeNetRequest.getSessionRules()).find((rule) =>
-    rule.id === id,
-  );
-  if (
-    existing &&
-    (!Number.isInteger(existing.priority) ||
-      !previousBypass ||
-      !ownsBypassRule(existing, previousBypass.rule))
-  ) {
-    throw new Error(`Session DNR rule ID collision: ${id}`);
-  }
+  const sessionRules = await browser.declarativeNetRequest.getSessionRules();
+  const previousRule = previousBypass
+    ? sessionRules.find((rule) => rule.id === previousBypass.rule.id)
+    : undefined;
+  const existing = previousRule && previousBypass && ownsBypassRule(previousRule, previousBypass.rule)
+    ? previousRule
+    : undefined;
+  const id = existing?.id ?? allocateBypassRuleId(tabId, sessionRules);
 
   const priority = existing ? existing.priority! + 1 : BYPASS_PRIORITY + 1;
   if (!Number.isInteger(priority) || priority > MAX_DNR_RULE_ID) {
     throw new Error(`Bypass priority is outside the DNR range: ${priority}`);
   }
-  const regexFilter = `^${escapeRegex(originalRequestUrl)}$`;
+  const regexFilter = `^${escapeRegex(originalRequestUrl)}(?:#.*)?$`;
   const bypass: OriginalBypass = {
     tabId,
     originalRequestUrl,

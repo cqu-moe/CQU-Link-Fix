@@ -201,7 +201,7 @@ describe('rewrite session state', () => {
     expect(await getTabState(7)).toEqual(rewriteRecord());
   });
 
-  it('installs one exact fragment-free top-frame allow rule before opening the full original URL', async () => {
+  it('installs one exact fragment-insensitive top-frame allow rule before opening the full original URL', async () => {
     const record = rewriteRecord({
       originalUrl: 'HTTPS://SSO.CQU.EDU.CN:443/a/../login?x=1&x=2#form',
     });
@@ -226,7 +226,8 @@ describe('rewrite session state', () => {
     expect(matcher.test('https://sso.cqu.edu.cn/login?x=1&x=2')).toBe(true);
     expect(matcher.test('https://sso.cqu.edu.cn/login?x=2&x=1')).toBe(false);
     expect(matcher.test('https://sso.cqu.edu.cn/other?x=1&x=2')).toBe(false);
-    expect(matcher.test('https://sso.cqu.edu.cn/login?x=1&x=2#form')).toBe(false);
+    expect(matcher.test('https://sso.cqu.edu.cn/login?x=1&x=2#form')).toBe(true);
+    expect(matcher.test('https://sso.cqu.edu.cn/login?x=1&x=2#other')).toBe(true);
     expect(updateTab).toHaveBeenCalledWith(7, { url: record.originalUrl });
     await expect(isOriginalBypass(7, record.originalUrl)).resolves.toBe(true);
     const stored = (await browser.storage.session.get('bypass:7'))['bypass:7'];
@@ -246,7 +247,7 @@ describe('rewrite session state', () => {
     });
   });
 
-  it('rejects an unsafe stored original and a session-rule ID collision without navigating', async () => {
+  it('rejects an unsafe stored original and allocates around a foreign session-rule ID', async () => {
     await browser.storage.session.set({
       'rewrite:7': rewriteRecord({ originalUrl: 'javascript:alert(1)' }),
     });
@@ -263,8 +264,12 @@ describe('rewrite session state', () => {
         condition: { resourceTypes: ['main_frame'] },
       },
     ]);
-    await expect(openOriginalOnce(7)).rejects.toThrow(/collision/i);
-    expect(updateTab).not.toHaveBeenCalled();
+    await openOriginalOnce(7);
+    expect(updateTab).toHaveBeenCalledWith(7, { url: rewriteRecord().originalUrl });
+    const rules = await browser.declarativeNetRequest.getSessionRules();
+    expect(rules).toHaveLength(2);
+    expect(rules[0]).toMatchObject({ id: 1_000_000_007, action: { type: 'block' } });
+    expect(rules[1]).toMatchObject({ id: 1_000_000_008, action: { type: 'allow' } });
   });
 
   it('clears both the record and explicit bypass even when no navigation listener is active', async () => {
@@ -366,7 +371,7 @@ describe('rewrite session state', () => {
     expect(sessionRules.current()).toHaveLength(1);
   });
 
-  it.each(['derived ID', 'derived regex'] as const)(
+  it.each(['reserved ID', 'derived regex'] as const)(
     'rejects stored bypass ownership with a mismatched %s even when an installed rule matches it',
     async (kind) => {
       const record = rewriteRecord();
@@ -378,9 +383,9 @@ describe('rewrite session state', () => {
         rule: { id: number; regexFilter: string };
       };
       const [installed] = sessionRules.current();
-      if (kind === 'derived ID') {
-        stored.rule.id += 1;
-        installed!.id += 1;
+      if (kind === 'reserved ID') {
+        stored.rule.id = 999_999_999;
+        installed!.id = stored.rule.id;
       } else {
         stored.rule.regexFilter = '^https://different.cqu.edu.cn/$';
         installed!.condition.regexFilter = stored.rule.regexFilter;
@@ -392,9 +397,22 @@ describe('rewrite session state', () => {
     },
   );
 
-  it('rejects rewrite records whose tab cannot map into the bypass DNR range', async () => {
+  it('accepts the full positive Chromium tab-ID range', async () => {
+    const highTabId = 2_147_483_647;
+    const record = rewriteRecord({ tabId: highTabId });
+    await recordRewrite(record);
+    mockSessionRuleStore();
+    mockUpdateTab().mockResolvedValue(undefined);
+
+    await openOriginalOnce(highTabId);
+
+    await expect(getTabState(highTabId)).resolves.toEqual(record);
+    await expect(isOriginalBypass(highTabId, record.originalUrl)).resolves.toBe(true);
+  });
+
+  it('rejects rewrite records above Chromium signed tab-ID range', async () => {
     await expect(
-      recordRewrite(rewriteRecord({ tabId: 1_147_483_648 })),
+      recordRewrite(rewriteRecord({ tabId: 2_147_483_648 })),
     ).rejects.toThrow(/tab|record/i);
   });
 });
@@ -517,7 +535,7 @@ describe('background rewrite recording and bypass', () => {
     expect(await getTabState(7)).toMatchObject({ ruleId: 'previous-record' });
   });
 
-  it('ignores a top-frame navigation whose tab cannot map into the bypass DNR range', async () => {
+  it('ignores a top-frame navigation above Chromium signed tab-ID range', async () => {
     await saveSettings(DEFAULT_SETTINGS);
     const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     const sessionGet = vi.spyOn(browser.storage.session, 'get');
@@ -525,7 +543,7 @@ describe('background rewrite recording and bypass', () => {
     sessionGet.mockClear();
 
     await fakeBrowser.webNavigation.onBeforeNavigate.trigger(
-      navigationDetails('https://sso.cqu.edu.cn/login', { tabId: 1_147_483_648 }),
+      navigationDetails('https://sso.cqu.edu.cn/login', { tabId: 2_147_483_648 }),
     );
     await new Promise((resolve) => setTimeout(resolve, 0));
 
@@ -1114,6 +1132,14 @@ describe('background session lifecycle, errors, and messages', () => {
       acquire,
       { id: browser.runtime.id, tab: tab() } as never,
     )).resolves.toEqual([undefined]);
+    await expect(fakeBrowser.runtime.onMessage.trigger(
+      { type: 'get-settings-snapshot' },
+      {
+        id: browser.runtime.id,
+        url: browser.runtime.getURL('/options.html'),
+        tab: tab(browser.runtime.getURL('/options.html')),
+      } as never,
+    )).resolves.toEqual([{ ok: true, snapshot: expect.any(Object) }]);
     const acquired = (await fakeBrowser.runtime.onMessage.trigger(
       acquire,
       { id: browser.runtime.id },

@@ -135,8 +135,8 @@ function compileRedirects(
     redirectRule(
       rule.dnrId,
       priority,
-      `^${authority}/info/(\\d+)/(\\d+)\\.htm(?:\\?)?$`,
-      `${target}?urltype=news.NewsContentUrl&wbtreeid=\\1&wbnewsid=\\2`,
+      `^${authority}/info/(\\d+)/(\\d+)\\.htm(?:\\?)?(#.*)?$`,
+      `${target}?urltype=news.NewsContentUrl&wbtreeid=\\1&wbnewsid=\\2\\3`,
     ),
   ];
 }

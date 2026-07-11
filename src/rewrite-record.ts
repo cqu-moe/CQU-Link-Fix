@@ -1,4 +1,4 @@
-export const MAX_REWRITE_TAB_ID = 1_147_483_647;
+export const MAX_REWRITE_TAB_ID = 2_147_483_647;
 
 export interface RewriteRecord {
   tabId: number;

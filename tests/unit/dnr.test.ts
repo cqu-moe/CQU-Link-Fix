@@ -279,7 +279,7 @@ describe('DNR compilation', () => {
     expect(() => compileDynamicRules([createIpRule(port)], [])).toThrow('invalid port');
   });
 
-  it('builds only a queryless Youth request target without assuming DNR sees fragments', () => {
+  it('builds only a queryless Youth request target and preserves Chrome-visible fragments', () => {
     const youth = compileDynamicRules(BUILT_IN_RULES, [])[1]!;
     const source = canonicalRequestUrl(
       'https://youth.cqu.edu.cn/info/1009/24264.htm#print',
@@ -288,6 +288,12 @@ describe('DNR compilation', () => {
       'https://youth.cqu.edu.cn/content.jsp?urltype=news.NewsContentUrl&wbtreeid=1009&wbnewsid=24264';
 
     expect(applyRegexRedirect(youth, source)).toBe(target);
+    expect(
+      applyRegexRedirect(
+        youth,
+        'https://youth.cqu.edu.cn/info/1009/24264.htm#print',
+      ),
+    ).toBe(`${target}#print`);
     expect(
       applyRegexRedirect(
         youth,
