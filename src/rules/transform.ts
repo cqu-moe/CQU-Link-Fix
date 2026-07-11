@@ -43,6 +43,10 @@ export function isCquDomain(input: string): boolean {
   return host === 'cqu.edu.cn' || host.endsWith('.cqu.edu.cn');
 }
 
+export function hasTopLevelCasTicket(url: URL): boolean {
+  return url.searchParams.has('ticket');
+}
+
 export function toAtrustDomainUrl(input: string): string {
   const url = parseHttpUrl(input);
   const host = url.hostname.toLowerCase();

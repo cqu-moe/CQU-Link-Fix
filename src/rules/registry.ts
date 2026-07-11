@@ -1,6 +1,10 @@
 import type { ExtensionSettings } from '../storage/settings';
 import { BUILT_IN_RULES } from './builtins';
-import { applyTransformer, assertCasServicePreserved } from './transform';
+import {
+  applyTransformer,
+  assertCasServicePreserved,
+  hasTopLevelCasTicket,
+} from './transform';
 import type { RewriteDecision, RuleDefinition } from './types';
 
 const EXPLICIT_PORT = /^[a-z][a-z\d+.-]*:\/\/[^/?#]*:(\d+)(?=[/?#]|$)/i;
@@ -28,7 +32,8 @@ export function decideRegisteredRewrite(
   if (
     (url.protocol !== 'http:' && url.protocol !== 'https:') ||
     url.username ||
-    url.password
+    url.password ||
+    hasTopLevelCasTicket(url)
   ) {
     return null;
   }

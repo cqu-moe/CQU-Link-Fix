@@ -121,6 +121,32 @@ describe('registered rewrites', () => {
     );
   });
 
+  it('does not rewrite top-level CAS ticket callbacks but preserves nested service text', () => {
+    const custom: CustomRule = {
+      id: 'custom-library',
+      dnrId: 10_001,
+      name: 'Library',
+      description: 'Test-only custom host',
+      category: 'custom',
+      defaultEnabled: true,
+      matcher: { kind: 'host', host: 'library.cqu.edu.cn' },
+      transformer: 'atrust-domain',
+    };
+
+    expect(
+      decideRegisteredRewrite(
+        'https://library.cqu.edu.cn/callback?state=x&ticket=synthetic',
+        [custom],
+      ),
+    ).toBeNull();
+
+    const nested =
+      'https://library.cqu.edu.cn/start?service=https%3A%2F%2Fclient.example%2Fcallback%3Fticket%3Dsynthetic';
+    expect(decideRegisteredRewrite(nested, [custom])?.targetUrl).toBe(
+      'https://library-cqu-edu-cn-s.atrust.cqu.edu.cn/start?service=https%3A%2F%2Fclient.example%2Fcallback%3Fticket%3Dsynthetic',
+    );
+  });
+
   it('matches only a registered Youth article path and preserves protected query values', () => {
     const input =
       'https://youth.cqu.edu.cn/info/1009/24264.htm?state=a%2Bb&redirect_uri=https%3A%2F%2Fclient.example%2Fcb%3Fx%3D1#details';

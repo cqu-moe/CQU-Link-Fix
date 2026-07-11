@@ -21,6 +21,7 @@ import {
 import { decideRegisteredRewrite, getEnabledRules } from '../src/rules/registry';
 import { compareRulePrecedence, reconcileDynamicRules } from '../src/rules/dnr';
 import type { RuleDefinition } from '../src/rules/types';
+import { hasTopLevelCasTicket } from '../src/rules/transform';
 import {
   allocateNavigationSequence,
   clearCommittedNavigation,
@@ -143,7 +144,8 @@ async function rewriteTopFrameNavigation(
   if (
     (url.protocol !== 'http:' && url.protocol !== 'https:') ||
     url.username ||
-    url.password
+    url.password ||
+    hasTopLevelCasTicket(url)
   ) {
     return;
   }

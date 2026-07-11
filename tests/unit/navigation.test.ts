@@ -32,6 +32,21 @@ describe('all-CQU navigation decision', () => {
     );
   });
 
+  it('does not rewrite top-level CAS ticket callbacks but preserves nested service text', () => {
+    expect(
+      decideAllCquRewrite(
+        navigationInput('https://foo.cqu.edu.cn/callback?ticket=synthetic&state=x'),
+        enabledSettings(),
+      ),
+    ).toBeNull();
+
+    const nested =
+      'https://foo.cqu.edu.cn/start?service=https%3A%2F%2Fclient.example%2Fcallback%3Fticket%3Dsynthetic';
+    expect(decideAllCquRewrite(navigationInput(nested), enabledSettings())).toBe(
+      'https://foo-cqu-edu-cn-s.atrust.cqu.edu.cn/start?service=https%3A%2F%2Fclient.example%2Fcallback%3Fticket%3Dsynthetic',
+    );
+  });
+
   it.each([
     ['subframe', navigationInput('https://foo.cqu.edu.cn/', { frameId: 1 })],
     ['invalid tab', navigationInput('https://foo.cqu.edu.cn/', { tabId: -1 })],

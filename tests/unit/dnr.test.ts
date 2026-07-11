@@ -183,7 +183,7 @@ describe('DNR compilation', () => {
       condition: { resourceTypes: MAIN_FRAME },
       action: { type: 'redirect' },
     });
-    expect(compiled).toHaveLength(2);
+    expect(compiled).toHaveLength(3);
     expect(youth!.priority!).toBeGreaterThan(sso!.priority!);
     expect(compileDynamicRules(BUILT_IN_RULES, [])).toEqual(
       compileDynamicRules(BUILT_IN_RULES, []),
@@ -196,11 +196,12 @@ describe('DNR compilation', () => {
     const compiled = compileDynamicRules([youth, host], []);
     const hostDnr = compiled.find((rule) => rule.id === host.dnrId)!;
     const youthDnr = compiled.find((rule) => rule.id === youth.dnrId)!;
+    const redirects = compiled.filter((rule) => rule.action.type === 'redirect');
 
     expect(compareRulePrecedence(host, youth)).toBeLessThan(0);
     expect(hostDnr.priority!).toBeGreaterThan(youthDnr.priority!);
-    expect(new Set(compiled.map((rule) => rule.priority)).size).toBe(compiled.length);
-    expect(compiled.every((rule) => rule.priority! > 0 && rule.priority! < 100_000)).toBe(true);
+    expect(new Set(redirects.map((rule) => rule.priority)).size).toBe(redirects.length);
+    expect(redirects.every((rule) => rule.priority! > 0 && rule.priority! < 100_000)).toBe(true);
   });
 
   it('rejects redirect sets that exceed the unique priority capacity', () => {
@@ -224,6 +225,31 @@ describe('DNR compilation', () => {
     );
     expect(applyRegexRedirect(sso!, 'https://sso.cqu.edu.cn.evil.example/login')).toBeNull();
     expect(applyRegexRedirect(sso!, 'https://sso.cqu.edu.cn:444/login')).toBeNull();
+  });
+
+  it('compiles a top-priority allow for top-level CAS ticket callbacks only', () => {
+    const custom = createYouthHostRule();
+    const compiled = compileDynamicRules([custom], []);
+    const redirect = compiled.find((rule) => rule.id === custom.dnrId)!;
+    const ticketAllow = compiled.find((rule) => rule.action.type === 'allow')!;
+
+    expect(ticketAllow.priority).toBeGreaterThan(redirect.priority!);
+    expect(ticketAllow.condition).toMatchObject({
+      isUrlFilterCaseSensitive: true,
+      resourceTypes: MAIN_FRAME,
+    });
+    expect(
+      matchesRegex(
+        ticketAllow,
+        'https://youth.cqu.edu.cn/callback?state=x&ticket=synthetic',
+      ),
+    ).toBe(true);
+    expect(
+      matchesRegex(
+        ticketAllow,
+        'https://youth.cqu.edu.cn/start?service=https%3A%2F%2Fclient.example%2Fcallback%3Fticket%3Dsynthetic',
+      ),
+    ).toBe(false);
   });
 
   it.each([
@@ -324,7 +350,9 @@ describe('DNR compilation', () => {
       'sso.cqu.edu.cn',
       'youth.cqu.edu.cn',
     ]);
-    const allows = first.filter((rule) => rule.action.type === 'allow');
+    const allows = first.filter(
+      (rule) => rule.action.type === 'allow' && rule.priority === 100_000,
+    );
 
     expect(first).toEqual(second);
     expect(allows).toHaveLength(2);
@@ -436,6 +464,26 @@ describe('queried Youth navigation routing', () => {
     fakeBrowser.webNavigation.onBeforeNavigate.removeAllListeners();
   });
 
+  it('does not record or navigate a top-level CAS ticket callback', async () => {
+    await saveSettings({
+      ...DEFAULT_SETTINGS,
+      enableAllCquDomains: true,
+      customRules: [createYouthHostRule()],
+    });
+    const updateTab = mockUpdateTab().mockResolvedValue(undefined);
+    await startBackgroundWithDnrMocks();
+
+    await fakeBrowser.webNavigation.onBeforeNavigate.trigger(
+      navigationDetails(
+        'https://youth.cqu.edu.cn/callback?state=x&ticket=synthetic',
+      ),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(updateTab).not.toHaveBeenCalled();
+    await expect(browser.storage.session.get('rewrite:7')).resolves.toEqual({});
+  });
+
   it('uses the hardened Rule Core for conflicts, protected duplicates, raw encoding, and fragments', async () => {
     await saveSettings(DEFAULT_SETTINGS);
     const updateTab = mockUpdateTab().mockResolvedValue(undefined);
@@ -504,7 +552,9 @@ describe('queried Youth navigation routing', () => {
       disabledBuiltInRuleIds: ['addon-youth-public'],
     });
     const compiled = compileDynamicRules([youth, host], []);
-    const compiledWinner = [...compiled].sort((left, right) => right.priority! - left.priority!)[0]!;
+    const compiledWinner = compiled
+      .filter((rule) => rule.action.type === 'redirect')
+      .sort((left, right) => right.priority! - left.priority!)[0]!;
     await startBackgroundWithDnrMocks();
 
     await fakeBrowser.webNavigation.onBeforeNavigate.trigger(

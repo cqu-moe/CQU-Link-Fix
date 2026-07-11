@@ -1,5 +1,10 @@
 import { type ExtensionSettings } from '../storage/settings';
-import { isAtrustUrl, isCquDomain, toAtrustDomainUrl } from '../rules/transform';
+import {
+  hasTopLevelCasTicket,
+  isAtrustUrl,
+  isCquDomain,
+  toAtrustDomainUrl,
+} from '../rules/transform';
 
 export interface NavigationInput {
   tabId: number;
@@ -35,7 +40,8 @@ export function decideAllCquRewrite(
     (url.protocol !== 'http:' && url.protocol !== 'https:') ||
     url.username ||
     url.password ||
-    url.port
+    url.port ||
+    hasTopLevelCasTicket(url)
   ) {
     return null;
   }

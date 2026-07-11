@@ -4,6 +4,8 @@ import { getEnabledRules } from './registry';
 import type { RuleDefinition } from './types';
 
 const ALLOW_ID_START = 80_000;
+const TICKET_ALLOW_ID = 999_999_999;
+const TICKET_ALLOW_PRIORITY = 2_000_000;
 const MAX_RULE_ID = 2_147_483_647;
 const MAX_REDIRECT_PRIORITY = 99_999;
 const MIN_REDIRECT_PRIORITY = 1;
@@ -155,6 +157,20 @@ function compileAllows(excludedHosts: readonly string[]): Browser.declarativeNet
   }));
 }
 
+function compileTicketAllow(): Browser.declarativeNetRequest.Rule {
+  return {
+    id: TICKET_ALLOW_ID,
+    priority: TICKET_ALLOW_PRIORITY,
+    action: { type: 'allow' },
+    condition: {
+      regexFilter:
+        '^https?://[^?#]+\\?(?:[^#&]*&)*ticket=[^#&]*(?:&[^#&]*)*(?:#.*)?$',
+      isUrlFilterCaseSensitive: true,
+      resourceTypes: MAIN_FRAME,
+    },
+  };
+}
+
 function assertUniqueRuleIds(rules: readonly Browser.declarativeNetRequest.Rule[]): void {
   const ids = new Set<number>();
   for (const rule of rules) {
@@ -181,6 +197,7 @@ export function compileDynamicRules(
   const compiled = [
     ...compileAllows(excludedHosts),
     ...rules.flatMap((rule) => compileRedirects(rule, priorities.get(rule)!)),
+    compileTicketAllow(),
   ];
   assertUniqueRuleIds(compiled);
   return compiled;
@@ -195,7 +212,7 @@ export async function reconcileDynamicRules(): Promise<void> {
     if (!regex) continue;
     const result = await browser.declarativeNetRequest.isRegexSupported({
       regex,
-      isCaseSensitive: false,
+      isCaseSensitive: rule.condition.isUrlFilterCaseSensitive ?? false,
       requireCapturing: rule.action.redirect?.regexSubstitution !== undefined,
     });
     if (!result.isSupported) {

@@ -26,7 +26,7 @@ test.describe('loaded extension redirects', () => {
     test(`rewrites ${protocol.toUpperCase()} SSO without changing ordered decoded CAS services`, async ({ extension }) => {
       const page = await extension.context.newPage();
       const services = [
-        'https://my.cqu.edu.cn/authserver/authentication/cas?a=1&b=2',
+        'https://my.cqu.edu.cn/authserver/authentication/cas?a=1&ticket=synthetic-nested',
         '/local/callback?next=/a+b&state=%2Fraw',
       ] as const;
       const original = `${protocol}://sso.cqu.edu.cn/login/deep` +
@@ -47,6 +47,17 @@ test.describe('loaded extension redirects', () => {
       expect(page.url()).toBe(once);
     });
   }
+
+  test('leaves a top-level CAS ticket callback on the original host without recording it', async ({ extension }) => {
+    const page = await extension.context.newPage();
+    const original = 'https://sso.cqu.edu.cn/login?state=x&ticket=synthetic';
+
+    await page.goto(original);
+
+    expect(page.url()).toBe(original);
+    const tabId = await activeTabId(extension, page);
+    await expect.poll(() => rewriteRecord(extension, tabId)).toBeNull();
+  });
 
   test('uses queryless Youth DNR mapping and Chromium fragment inheritance', async ({ extension }) => {
     const page = await extension.context.newPage();
