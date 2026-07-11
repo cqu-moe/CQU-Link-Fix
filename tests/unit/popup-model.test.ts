@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { RewriteRecord } from '../../src/background/session';
+import type { RewriteRecord } from '../../src/rewrite-record';
 import { buildPopupModel } from '../../src/ui/popup-model';
 
 function rewriteRecord(overrides: Partial<RewriteRecord> = {}): RewriteRecord {

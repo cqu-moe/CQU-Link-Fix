@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { RewriteRecord } from '../../src/background/session';
 import type { BackgroundMessage } from '../../src/messages';
+import type { RewriteRecord } from '../../src/rewrite-record';
 import {
   initializePopupController,
   type PopupControllerDependencies,
@@ -106,6 +106,21 @@ describe('popup controller', () => {
     expect(button('open-options').disabled).toBe(false);
   });
 
+  it('recovers visibly when querying the active tab rejects', async () => {
+    const deps = dependencies({
+      queryActiveTabs: vi.fn().mockRejectedValue(new Error('tabs unavailable')),
+    });
+
+    await initializePopupController(document, deps);
+
+    expect(deps.sendMessage).not.toHaveBeenCalled();
+    expect(text('status')).toBe('无法读取当前标签页');
+    expect(text('feedback')).toBe('请关闭弹窗后重试');
+    expect(button('open-original').disabled).toBe(true);
+    expect(button('exclude-host').disabled).toBe(true);
+    expect(button('open-options').disabled).toBe(false);
+  });
+
   it('does not query stale state or enable page actions on a restricted URL', async () => {
     const deps = dependencies({
       queryActiveTabs: vi.fn().mockResolvedValue([{ id: 7, url: 'chrome://extensions/' }]),
@@ -158,6 +173,65 @@ describe('popup controller', () => {
     expect(text('feedback')).toBe('设置版本冲突');
     expect(deps.closePopup).not.toHaveBeenCalled();
     expect(button('open-original').disabled).toBe(false);
+  });
+
+  it.each([
+    { action: 'open-original', failure: '打开通信失败' },
+    { action: 'exclude-host', failure: '暂停通信失败' },
+  ])('recovers controls when $action messaging rejects', async ({ action, failure }) => {
+    const sendMessage = vi.fn((message: BackgroundMessage) => {
+      if (message.type === 'get-tab-state') {
+        return Promise.resolve({ ok: true, state: rewriteRecord() });
+      }
+      return Promise.reject(new Error(failure));
+    });
+    const deps = dependencies({ sendMessage });
+    await initializePopupController(document, deps);
+
+    button(action).click();
+    await flushActions();
+
+    expect(text('feedback')).toBe(failure);
+    expect(deps.closePopup).not.toHaveBeenCalled();
+    expect(button('open-original').disabled).toBe(false);
+    expect(button('exclude-host').disabled).toBe(false);
+  });
+
+  it('rejects a get-state-shaped response to a mutation', async () => {
+    const sendMessage = vi.fn((message: BackgroundMessage) => Promise.resolve(
+      message.type === 'get-tab-state'
+        ? { ok: true, state: rewriteRecord() }
+        : { ok: true, state: rewriteRecord() },
+    ));
+    const deps = dependencies({ sendMessage });
+    await initializePopupController(document, deps);
+
+    button('open-original').click();
+    await flushActions();
+
+    expect(text('feedback')).toBe('原地址未能打开');
+    expect(deps.closePopup).not.toHaveBeenCalled();
+    expect(button('open-original').disabled).toBe(false);
+  });
+
+  it('opens options once while pending and shows confirmation after success', async () => {
+    let resolveOptions: (() => void) | undefined;
+    const opening = new Promise<void>((resolve) => { resolveOptions = resolve; });
+    const deps = dependencies({
+      openOptionsPage: vi.fn().mockReturnValue(opening),
+    });
+    await initializePopupController(document, deps);
+
+    button('open-options').click();
+    button('open-options').click();
+
+    expect(deps.openOptionsPage).toHaveBeenCalledOnce();
+    expect(button('open-options').disabled).toBe(true);
+    resolveOptions?.();
+    await flushActions();
+
+    expect(text('feedback')).toBe('已打开规则管理页面');
+    expect(button('open-options').disabled).toBe(false);
   });
 
   it('confirms a successful exclusion and catches options errors', async () => {

@@ -1,9 +1,9 @@
-import type { RewriteRecord } from '../background/session';
 import {
   MAX_MESSAGE_TAB_ID,
   type BackgroundMessage,
   type BackgroundResponse,
 } from '../messages';
+import { isRewriteRecord, type RewriteRecord } from '../rewrite-record';
 import { buildPopupModel, type PopupModel } from './popup-model';
 
 interface PopupTab {
@@ -50,24 +50,6 @@ function getElements(root: Document): PopupElements {
   };
 }
 
-function isRecord(value: unknown): value is RewriteRecord {
-  if (!value || typeof value !== 'object') return false;
-  const record = value as Partial<RewriteRecord>;
-  return (
-    Number.isInteger(record.tabId) &&
-    typeof record.ruleId === 'string' &&
-    record.ruleId.length > 0 &&
-    typeof record.originalUrl === 'string' &&
-    typeof record.targetUrl === 'string' &&
-    typeof record.recordedAt === 'number' &&
-    Number.isFinite(record.recordedAt) &&
-    typeof record.generation === 'string' &&
-    record.generation.length > 0 &&
-    Number.isInteger(record.navigationSequence) &&
-    (record.error === undefined || typeof record.error === 'string')
-  );
-}
-
 function isGetStateSuccess(
   value: unknown,
   expectedTabId: number,
@@ -75,7 +57,7 @@ function isGetStateSuccess(
   if (!value || typeof value !== 'object') return false;
   const response = value as { ok?: unknown; state?: unknown };
   return response.ok === true && 'state' in response &&
-    (response.state === null || (isRecord(response.state) && response.state.tabId === expectedTabId));
+    (response.state === null || isRewriteRecord(response.state, expectedTabId));
 }
 
 function isMutationSuccess(value: unknown): value is { ok: true } {

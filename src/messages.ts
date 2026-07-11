@@ -1,11 +1,11 @@
-import type { RewriteRecord } from './background/session';
+import { MAX_REWRITE_TAB_ID, type RewriteRecord } from './rewrite-record';
 import {
   validateEditableSettings,
   type EditableSettings,
   type SettingsSnapshot,
 } from './storage/settings';
 
-export const MAX_MESSAGE_TAB_ID = 1_147_483_647;
+export const MAX_MESSAGE_TAB_ID = MAX_REWRITE_TAB_ID;
 
 export type BackgroundMessage =
   | { type: 'get-tab-state'; tabId: number }

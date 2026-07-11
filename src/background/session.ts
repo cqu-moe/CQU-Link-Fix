@@ -1,16 +1,14 @@
 import type { Browser } from 'wxt/browser';
+import {
+  MAX_REWRITE_TAB_ID,
+  canonicalRequestUrl,
+  isRewriteRecord,
+  sameRequestUrl,
+  type RewriteRecord,
+} from '../rewrite-record';
 import { updateSettings } from '../storage/settings';
 
-export interface RewriteRecord {
-  tabId: number;
-  ruleId: string;
-  originalUrl: string;
-  targetUrl: string;
-  recordedAt: number;
-  generation: string;
-  navigationSequence: number;
-  error?: string;
-}
+export { canonicalRequestUrl, sameRequestUrl, type RewriteRecord } from '../rewrite-record';
 
 interface BypassRuleIdentity {
   id: number;
@@ -32,7 +30,7 @@ interface OriginalBypass {
 
 const BYPASS_RULE_ID_START = 1_000_000_000;
 const MAX_DNR_RULE_ID = 2_147_483_647;
-export const MAX_BYPASS_TAB_ID = MAX_DNR_RULE_ID - BYPASS_RULE_ID_START;
+export const MAX_BYPASS_TAB_ID = MAX_REWRITE_TAB_ID;
 const BYPASS_PRIORITY = 1_000_000;
 const MAIN_FRAME: NonNullable<Browser.declarativeNetRequest.RuleCondition['resourceTypes']> = [
   'main_frame',
@@ -58,55 +56,6 @@ function bypassRuleId(tabId: number): number {
   const id = BYPASS_RULE_ID_START + tabId;
   if (id > MAX_DNR_RULE_ID) throw new Error(`Tab ID is outside the bypass rule range: ${tabId}`);
   return id;
-}
-
-export function canonicalRequestUrl(value: string): string {
-  let url: URL;
-  try {
-    url = new URL(value);
-  } catch {
-    throw new Error('Rewrite URL must be a valid HTTP(S) URL');
-  }
-  if (
-    (url.protocol !== 'http:' && url.protocol !== 'https:') ||
-    url.username ||
-    url.password ||
-    !url.hostname
-  ) {
-    throw new Error('Rewrite URL must be a safe HTTP(S) URL');
-  }
-  url.hash = '';
-  return url.toString();
-}
-
-export function sameRequestUrl(left: string, right: string): boolean {
-  try {
-    return canonicalRequestUrl(left) === canonicalRequestUrl(right);
-  } catch {
-    return false;
-  }
-}
-
-function isRewriteRecord(value: unknown, tabId?: number): value is RewriteRecord {
-  if (!value || typeof value !== 'object') return false;
-  const record = value as Partial<RewriteRecord>;
-  return (
-    Number.isInteger(record.tabId) &&
-    (record.tabId as number) >= 0 &&
-    (record.tabId as number) <= MAX_BYPASS_TAB_ID &&
-    (tabId === undefined || record.tabId === tabId) &&
-    typeof record.ruleId === 'string' &&
-    record.ruleId.length > 0 &&
-    typeof record.originalUrl === 'string' &&
-    typeof record.targetUrl === 'string' &&
-    typeof record.recordedAt === 'number' &&
-    Number.isFinite(record.recordedAt) &&
-    typeof record.generation === 'string' &&
-    record.generation.length > 0 &&
-    Number.isInteger(record.navigationSequence) &&
-    (record.navigationSequence as number) >= 0 &&
-    (record.error === undefined || typeof record.error === 'string')
-  );
 }
 
 function assertRewriteRecord(record: RewriteRecord): void {

@@ -1,4 +1,8 @@
-import type { RewriteRecord } from '../background/session';
+import {
+  parseSafeHttpUrl,
+  sameRequestUrl,
+  type RewriteRecord,
+} from '../rewrite-record';
 
 export interface PopupModel {
   status: string;
@@ -20,35 +24,11 @@ const UNSUPPORTED_MODEL: PopupModel = {
   error: null,
 };
 
-function parseHttpUrl(value: string | null | undefined): URL | null {
-  if (!value) return null;
-  try {
-    const url = new URL(value);
-    if (
-      (url.protocol !== 'http:' && url.protocol !== 'https:') ||
-      url.username ||
-      url.password ||
-      !url.hostname
-    ) {
-      return null;
-    }
-    return url;
-  } catch {
-    return null;
-  }
-}
-
-function canonicalRequestUrl(url: URL): string {
-  const canonical = new URL(url);
-  canonical.hash = '';
-  return canonical.toString();
-}
-
 export function buildPopupModel(
   tabUrl: string | null | undefined,
   record: RewriteRecord | null | undefined,
 ): PopupModel {
-  const current = parseHttpUrl(tabUrl);
+  const current = parseSafeHttpUrl(tabUrl);
   if (!current) return { ...UNSUPPORTED_MODEL };
 
   const unchanged: PopupModel = {
@@ -62,12 +42,12 @@ export function buildPopupModel(
   };
   if (!record) return unchanged;
 
-  const original = parseHttpUrl(record.originalUrl);
-  const target = parseHttpUrl(record.targetUrl);
+  const original = parseSafeHttpUrl(record.originalUrl);
+  const target = parseSafeHttpUrl(record.targetUrl);
   if (
     !original ||
     !target ||
-    canonicalRequestUrl(current) !== canonicalRequestUrl(target)
+    !sameRequestUrl(tabUrl ?? '', record.targetUrl)
   ) {
     return { ...unchanged, canExclude: false };
   }
