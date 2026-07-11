@@ -34,6 +34,10 @@ import {
   SettingsRevisionConflict,
   updateSettingsSnapshot,
 } from '../src/storage/settings';
+import {
+  acquireCustomPermissionLease,
+  releaseCustomPermissionLease,
+} from '../src/background/custom-permission-leases';
 
 let reconciliationQueue = Promise.resolve();
 const latestTopFrameNavigation = new Map<number, symbol>();
@@ -213,6 +217,14 @@ function scheduleTopFrameRewrite(
 async function dispatchBackgroundMessage(
   message: BackgroundMessage,
 ): Promise<BackgroundResponse> {
+  if (message.type === 'acquire-custom-permission-lease') {
+    const lease = await acquireCustomPermissionLease(message.origins);
+    return { ok: true, leaseNonce: lease.nonce };
+  }
+  if (message.type === 'release-custom-permission-lease') {
+    const released = await releaseCustomPermissionLease(message.nonce);
+    return { ok: true, requiredOrigins: released.requiredOrigins };
+  }
   if (message.type === 'replace-settings') {
     const snapshot = await replaceSettingsAtRevision(message.settings, message.expectedRevision);
     return { ok: true, revision: snapshot.revision };

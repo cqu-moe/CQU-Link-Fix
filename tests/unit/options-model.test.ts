@@ -32,6 +32,8 @@ describe('options model', () => {
     expect(model.groups[0]!.rules[0]).toMatchObject({
       id: 'default-disabled',
       enabled: false,
+      locked: true,
+      lockReason: expect.stringContaining('默认关闭'),
     });
   });
 

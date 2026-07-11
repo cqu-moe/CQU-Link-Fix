@@ -7,11 +7,15 @@ import {
   isBuiltInSourceHost,
   normalizeCustomCquHost,
 } from '../rules/custom-rule-policy';
+import {
+  customPermissionOriginsForHost,
+  type CustomPermissionOriginPair,
+} from '../custom-permission-lease';
 
 export { CUSTOM_DNR_ID_MAX, CUSTOM_DNR_ID_MIN } from '../rules/custom-rule-policy';
 
 export interface ExactOriginPermission {
-  origins: string[];
+  origins: CustomPermissionOriginPair;
 }
 
 function sourceHosts(rules: readonly CustomRule[]): Set<string> {
@@ -66,9 +70,5 @@ export function selectNextCustomDnrId(usedIds: Iterable<number>): number | null 
 
 export function customRulePermissions(rule: CustomRule): ExactOriginPermission {
   if (rule.matcher.kind !== 'host') throw new Error('自定义权限仅支持域名规则');
-  const host = normalizeCustomCquHost(rule.matcher.host);
-  const targetHost = `${host.replaceAll('.', '-')}-s.atrust.cqu.edu.cn`;
-  return {
-    origins: [`*://${host}/*`, `https://${targetHost}/*`],
-  };
+  return { origins: customPermissionOriginsForHost(rule.matcher.host) };
 }

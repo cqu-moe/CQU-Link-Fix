@@ -6,6 +6,10 @@ import {
   setAllCquMode,
 } from '../../src/storage/settings';
 import { initializeOptionsController } from '../../src/ui/options-controller';
+import {
+  acquireCustomPermissionLeaseViaBackground,
+  releaseCustomPermissionLeaseViaBackground,
+} from '../../src/ui/custom-permission-lease-client';
 
 let started = false;
 
@@ -25,6 +29,8 @@ function startOptions(): void {
     containsPermission: (permission) => browser.permissions.contains(permission),
     requestPermission: (permission) => browser.permissions.request(permission),
     removePermission: (permission) => browser.permissions.remove(permission),
+    acquirePermissionLease: acquireCustomPermissionLeaseViaBackground,
+    releasePermissionLease: releaseCustomPermissionLeaseViaBackground,
   }).catch(showStartupFailure);
 }
 

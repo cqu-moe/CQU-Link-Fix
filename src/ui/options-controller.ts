@@ -12,9 +12,21 @@ import {
   selectNextCustomDnrId,
   type ExactOriginPermission,
 } from './custom-rule';
-import { buildOptionsModel, toEditableSettings } from './options-model';
+import {
+  buildOptionsModel,
+  toEditableSettings,
+  type OptionsRuleModel,
+} from './options-model';
+import type {
+  CustomPermissionLeaseHandle,
+  CustomPermissionLeaseRelease,
+} from '../custom-permission-lease';
 
 export type { ExactOriginPermission } from './custom-rule';
+
+interface OriginPermission {
+  origins: string[];
+}
 
 export interface OptionsControllerDependencies {
   builtInRules: readonly RuleDefinition[];
@@ -24,9 +36,15 @@ export interface OptionsControllerDependencies {
     expectedRevision: number,
   ) => Promise<ReplaceSettingsResult>;
   setAllCquMode: (enabled: boolean) => Promise<boolean>;
-  containsPermission: (permission: ExactOriginPermission) => Promise<boolean>;
+  containsPermission: (permission: OriginPermission) => Promise<boolean>;
   requestPermission: (permission: ExactOriginPermission) => Promise<boolean>;
-  removePermission: (permission: ExactOriginPermission) => Promise<boolean>;
+  removePermission: (permission: OriginPermission) => Promise<boolean>;
+  acquirePermissionLease: (
+    permission: ExactOriginPermission,
+  ) => Promise<CustomPermissionLeaseHandle | null>;
+  releasePermissionLease: (
+    nonce: string,
+  ) => Promise<CustomPermissionLeaseRelease | null>;
 }
 
 interface OptionsElements {
@@ -47,6 +65,8 @@ interface CommitResult {
   outcome: CommitOutcome;
   snapshotAfterFailure?: SettingsSnapshot | null;
 }
+
+type RenderableRule = OptionsRuleModel;
 
 const initializedScopes = new WeakSet<Element>();
 
@@ -131,7 +151,8 @@ export async function initializeOptionsController(
     const disabled = pending || saved === null;
     for (const control of scope.querySelectorAll('button, input')) {
       if (control instanceof HTMLButtonElement || control instanceof HTMLInputElement) {
-        control.disabled = disabled;
+        const locked = control instanceof HTMLInputElement && control.dataset.locked === 'true';
+        control.disabled = disabled || locked;
         control.setAttribute('aria-busy', String(pending));
       }
     }
@@ -211,27 +232,26 @@ export async function initializeOptionsController(
   };
 
   const renderRuleToggle = (
-    rule: RuleDefinition,
-    checked: boolean,
-    custom: boolean,
+    rule: RenderableRule,
   ): HTMLInputElement => {
+    const isCustom = rule.category === 'custom';
     const input = root.createElement('input');
     input.type = 'checkbox';
-    input.id = checkboxId(custom ? 'custom-enabled' : 'built-in-enabled', rule.id);
-    input.checked = checked;
-    if (custom) input.dataset.customRuleId = rule.id;
+    input.id = checkboxId(isCustom ? 'custom-enabled' : 'built-in-enabled', rule.id);
+    input.checked = rule.enabled;
+    if (isCustom) input.dataset.customRuleId = rule.id;
     else input.dataset.ruleId = rule.id;
-    input.setAttribute('aria-label', `${checked ? '停用' : '启用'}${rule.name}`);
+    if (rule.locked) {
+      const reason = rule.lockReason ?? '此规则当前不可更改。';
+      input.dataset.locked = 'true';
+      input.disabled = true;
+      input.title = reason;
+      input.setAttribute('aria-disabled', 'true');
+      input.setAttribute('aria-label', `${rule.name}：${reason}`);
+      return input;
+    }
+    input.setAttribute('aria-label', `${rule.enabled ? '停用' : '启用'}${rule.name}`);
     input.addEventListener('change', () => {
-      if (custom) {
-        runEditable((current) => {
-          const disabled = new Set(current.disabledBuiltInRuleIds);
-          if (input.checked) disabled.delete(rule.id);
-          else disabled.add(rule.id);
-          return { ...current, disabledBuiltInRuleIds: [...disabled].sort() };
-        }, `已${input.checked ? '启用' : '停用'} ${rule.name}`);
-        return;
-      }
       runEditable((current) => {
         const disabled = new Set(current.disabledBuiltInRuleIds);
         if (input.checked) disabled.delete(rule.id);
@@ -243,16 +263,15 @@ export async function initializeOptionsController(
   };
 
   const renderRuleCard = (
-    rule: RuleDefinition,
-    checked: boolean,
-    custom: boolean,
+    rule: RenderableRule,
   ): HTMLElement => {
+    const isCustom = rule.category === 'custom';
     const article = root.createElement('article');
     article.className = 'rule-card';
     const header = root.createElement('div');
     header.className = 'rule-card__header';
     const label = root.createElement('label');
-    const input = renderRuleToggle(rule, checked, custom);
+    const input = renderRuleToggle(rule);
     label.htmlFor = input.id;
     label.textContent = rule.name;
     header.append(label, input);
@@ -263,7 +282,16 @@ export async function initializeOptionsController(
       ? `${rule.matcher.host}:${rule.matcher.port}`
       : rule.matcher.host;
     article.append(header, description, range);
-    if (custom) {
+    if (rule.locked && rule.lockReason) {
+      const lockReason = root.createElement('p');
+      lockReason.id = checkboxId('rule-lock-reason', rule.id);
+      lockReason.className = 'rule-lock-reason';
+      lockReason.dataset.lockReasonFor = rule.id;
+      lockReason.textContent = rule.lockReason;
+      input.setAttribute('aria-describedby', lockReason.id);
+      article.append(lockReason);
+    }
+    if (isCustom) {
       const remove = root.createElement('button');
       remove.type = 'button';
       remove.className = 'danger-button';
@@ -304,15 +332,18 @@ export async function initializeOptionsController(
       description.textContent = group.description;
       fieldset.append(legend, description);
       if (group.rules.length === 0) appendEmptyState(root, fieldset, '当前版本暂无此类内置规则。');
-      else for (const rule of group.rules) fieldset.append(renderRuleCard(rule, rule.enabled, false));
+      else for (const rule of group.rules) fieldset.append(renderRuleCard(rule));
       return fieldset;
     });
     elements.groups.replaceChildren(...groupNodes);
 
     const disabled = new Set(saved.settings.disabledBuiltInRuleIds);
-    const customNodes = saved.settings.customRules.map((rule) =>
-      renderRuleCard(rule, !disabled.has(rule.id), true),
-    );
+    const customNodes = saved.settings.customRules.map((rule): RenderableRule => ({
+      ...rule,
+      enabled: !disabled.has(rule.id),
+      locked: false,
+      lockReason: null,
+    })).map(renderRuleCard);
     elements.customList.replaceChildren(...customNodes);
     if (customNodes.length === 0) appendEmptyState(root, elements.customList, '尚未添加本地精确规则。');
 
@@ -415,42 +446,40 @@ export async function initializeOptionsController(
         return Promise.reject(error);
       }
     }));
+    let leaseOperation: Promise<CustomPermissionLeaseHandle | null>;
+    try {
+      leaseOperation = dependencies.acquirePermissionLease(permission);
+    } catch {
+      leaseOperation = Promise.resolve(null);
+    }
     let requestOperation: Promise<boolean>;
     try {
       requestOperation = dependencies.requestPermission(permission);
     } catch (error) {
       requestOperation = Promise.reject(error);
     }
-    const permissionOperation = (async () => {
-      const granted = await requestOperation;
-      if (!granted) return { granted: false, newlyAcquiredOrigins: [] as string[] };
-      const containment = await containmentOperation;
-      const canProveOwnership = containment.every((result) => result.status === 'fulfilled');
-      return {
-        granted: true,
-        newlyAcquiredOrigins: canProveOwnership
-          ? permission.origins.filter((_, index) =>
-            containment[index]!.status === 'fulfilled' && !containment[index]!.value,
-          )
-          : null,
-      };
-    })();
+    const coordinationOperation = Promise.allSettled([leaseOperation, requestOperation]);
 
     void (async () => {
-      let acquisition: {
-        granted: boolean;
-        newlyAcquiredOrigins: string[] | null;
-      };
-      try {
-        acquisition = await permissionOperation;
-      } catch {
-        elements.customError.textContent = '无法检查或申请该域名的访问权限。';
+      const [leaseResult, requestResult] = await coordinationOperation;
+      const lease = leaseResult?.status === 'fulfilled' ? leaseResult.value : null;
+      const granted = requestResult?.status === 'fulfilled' && requestResult.value;
+      if (!lease) {
+        elements.customError.textContent = '无法建立权限协调租约；规则未保存，访问权限已保留。';
         return;
       }
-      if (!acquisition.granted) {
+      if (!granted) {
+        await dependencies.releasePermissionLease(lease.nonce);
         elements.customError.textContent = '未授予该域名的访问权限，规则未保存。';
         return;
       }
+      const containment = await containmentOperation;
+      const canProveOwnership = containment.every((result) => result.status === 'fulfilled');
+      const newlyAcquiredOrigins = canProveOwnership
+        ? permission.origins.filter((_, index) =>
+          containment[index]!.status === 'fulfilled' && !containment[index]!.value,
+        )
+        : null;
 
       const result = await commit({
         ...toEditableSettings(saved!.settings),
@@ -458,6 +487,7 @@ export async function initializeOptionsController(
       }, `已添加 ${rule.name}`);
       if (result.outcome === 'success') {
         elements.customHost.value = '';
+        await dependencies.releasePermissionLease(lease.nonce);
         return;
       }
       elements.customError.textContent = result.outcome === 'conflict'
@@ -466,15 +496,14 @@ export async function initializeOptionsController(
       const fresh = result.snapshotAfterFailure === undefined
         ? await reloadSavedSnapshot()
         : result.snapshotAfterFailure;
-      if (!fresh || acquisition.newlyAcquiredOrigins === null) {
+      const released = await dependencies.releasePermissionLease(lease.nonce);
+      if (!fresh || !released || newlyAcquiredOrigins === null) {
         elements.customError.textContent = '规则未保存，且无法安全确认权限归属；已保留访问权限。';
         return;
       }
-      const persistedOrigins = new Set(fresh.settings.customRules.flatMap((persistedRule) =>
-        customRulePermissions(persistedRule).origins,
-      ));
-      const removableOrigins = acquisition.newlyAcquiredOrigins.filter(
-        (origin) => !persistedOrigins.has(origin),
+      const requiredOrigins = new Set(released.requiredOrigins);
+      const removableOrigins = newlyAcquiredOrigins.filter(
+        (origin) => !requiredOrigins.has(origin),
       );
       if (removableOrigins.length > 0) {
         try {

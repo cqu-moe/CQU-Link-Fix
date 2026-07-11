@@ -1064,6 +1064,58 @@ describe('background session lifecycle, errors, and messages', () => {
     expect(await loadSettings()).toEqual(DEFAULT_SETTINGS);
   });
 
+  it.each([
+    {
+      type: 'acquire-custom-permission-lease',
+      origins: ['*://*.cqu.edu.cn/*', 'https://x-s.atrust.cqu.edu.cn/*'],
+    },
+    {
+      type: 'acquire-custom-permission-lease',
+      origins: ['*://1.1.1.1/*', 'https://1-1-1-1-s.atrust.cqu.edu.cn/*'],
+    },
+    {
+      type: 'acquire-custom-permission-lease',
+      origins: ['*://library.cqu.edu.cn/*', 'https://wrong-s.atrust.cqu.edu.cn/*'],
+    },
+    { type: 'release-custom-permission-lease', nonce: 'forged' },
+  ])('rejects malformed custom permission lease message before dispatch: %#', async (message) => {
+    await startBackground();
+
+    await expect(fakeBrowser.runtime.onMessage.trigger(
+      message,
+      { id: browser.runtime.id },
+    )).resolves.toEqual([undefined]);
+  });
+
+  it('accepts trusted lease messages and rejects the same acquire message from a tab sender', async () => {
+    await startBackground();
+    const acquire = {
+      type: 'acquire-custom-permission-lease',
+      origins: [
+        '*://library.cqu.edu.cn/*',
+        'https://library-cqu-edu-cn-s.atrust.cqu.edu.cn/*',
+      ],
+    };
+
+    await expect(fakeBrowser.runtime.onMessage.trigger(
+      acquire,
+      { id: browser.runtime.id, tab: tab() } as never,
+    )).resolves.toEqual([undefined]);
+    const acquired = (await fakeBrowser.runtime.onMessage.trigger(
+      acquire,
+      { id: browser.runtime.id },
+    ))[0] as unknown as { ok: true; leaseNonce: string };
+    expect(acquired).toEqual({ ok: true, leaseNonce: expect.stringMatching(/^[0-9a-f-]{36}$/) });
+
+    await expect(fakeBrowser.runtime.onMessage.trigger({
+      type: 'release-custom-permission-lease',
+      nonce: acquired.leaseNonce,
+    }, { id: browser.runtime.id })).resolves.toEqual([{
+      ok: true,
+      requiredOrigins: [],
+    }]);
+  });
+
   it('serializes an independent UI replacement with background exclusion and mode persistence', async () => {
     await saveSettings(DEFAULT_SETTINGS);
     const expectedRevision = (await loadSettingsSnapshot()).revision;

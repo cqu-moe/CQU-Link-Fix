@@ -14,6 +14,8 @@ const GROUPS: readonly {
 
 export interface OptionsRuleModel extends RuleDefinition {
   enabled: boolean;
+  locked: boolean;
+  lockReason: string | null;
 }
 
 export interface OptionsGroupModel {
@@ -40,6 +42,10 @@ export function buildOptionsModel(
         .map((rule) => ({
           ...structuredClone(rule),
           enabled: rule.defaultEnabled && !disabled.has(rule.id),
+          locked: !rule.defaultEnabled,
+          lockReason: rule.defaultEnabled
+            ? null
+            : '此内置规则由当前版本默认关闭，暂不支持手动启用。',
         })),
     })),
   };
