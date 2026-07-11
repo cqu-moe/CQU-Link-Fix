@@ -1163,7 +1163,7 @@ git commit -m "feat(ui): add functional rewrite popup"
 - Test: `tests/unit/custom-rule.test.ts`
 
 **Interfaces:**
-- Consumes: settings, built-ins, `setAllCquMode`, and `reconcileDynamicRules` via storage updates.
+- Consumes: built-ins, `getSettingsSnapshotViaBackground()`, revision-aware `replaceSettingsViaBackground(editable, expectedRevision)`, `setAllCquMode()`, and `reconcileDynamicRules` via background-owned storage updates.
 - Produces: `parseCustomRule(input, nextDnrId)` and the rule-management UI.
 
 - [ ] **Step 1: Write failing custom-rule validation tests**
@@ -1238,7 +1238,11 @@ Render:
 - excluded hosts;
 - custom-rule form and validation error text.
 
-All state changes call `saveSettings`; the existing storage listener reconciles DNR rules. Use `textContent` and DOM creation rather than interpolated `innerHTML` for rule names and descriptions.
+Load initial UI state only through `getSettingsSnapshotViaBackground()`. Keep both the returned settings and revision in the controller. For master-switch, built-in-rule, excluded-host, and custom-rule edits, construct editable settings without `enableAllCquDomains`, then call `replaceSettingsViaBackground(editable, revision)`. On success, retain the returned revision for the next edit; the existing background storage listener reconciles DNR rules.
+
+If replacement returns `code: 'settings-conflict'`, do not retry the stale edit. Reload with `getSettingsSnapshotViaBackground()`, render the fresh state and revision, and show a visible conflict message explaining that newer settings were preserved and the user must reapply the edit. Other operation failures also remain visible and must not update the rendered saved state.
+
+The options page and popup must never import or call `saveSettings()` directly. All production settings writes are background-owned. The all-CQU switch is not part of editable replacement state: it must continue to call `setAllCquMode()` from the permission-caller UI context so Chromium's permission prompt remains valid, then reload the background snapshot to obtain the resulting mode and revision. Use `textContent` and DOM creation rather than interpolated `innerHTML` for rule names, descriptions, and conflict errors.
 
 Before saving a custom hostname, request only its exact source and generated target origins:
 
@@ -1253,7 +1257,7 @@ if (!granted) throw new Error('未授予该域名的访问权限');
 
 Run: `pnpm test -- tests/unit/custom-rule.test.ts tests/unit/settings.test.ts tests/unit/dnr.test.ts && pnpm typecheck && pnpm build`
 
-Expected: tests pass; options HTML is generated; invalid custom input cannot be saved; permission denial leaves all-CQU disabled.
+Expected: tests pass; options HTML is generated; invalid custom input cannot be saved; two controllers editing the same revision produce one success and one visible conflict/reload; no options/popup production code calls `saveSettings()`; permission denial through `setAllCquMode()` leaves all-CQU disabled.
 
 - [ ] **Step 6: Commit rule management UI**
 
