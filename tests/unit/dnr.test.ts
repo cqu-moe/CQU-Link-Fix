@@ -152,6 +152,11 @@ function createCustomYouthArticleRule(): CustomRule {
   };
 }
 
+function compileTicketAllowForTest(): Browser.declarativeNetRequest.Rule {
+  return compileDynamicRules([createYouthHostRule()], [])
+    .find((rule) => rule.action.type === 'allow')!;
+}
+
 describe('DNR compilation', () => {
   it('uses one precedence function for custom, Youth, and other rules', () => {
     const core = BUILT_IN_RULES[0]!;
@@ -231,25 +236,38 @@ describe('DNR compilation', () => {
     const custom = createYouthHostRule();
     const compiled = compileDynamicRules([custom], []);
     const redirect = compiled.find((rule) => rule.id === custom.dnrId)!;
-    const ticketAllow = compiled.find((rule) => rule.action.type === 'allow')!;
+    const ticketAllow = compileTicketAllowForTest();
 
     expect(ticketAllow.priority).toBeGreaterThan(redirect.priority!);
     expect(ticketAllow.condition).toMatchObject({
       isUrlFilterCaseSensitive: true,
       resourceTypes: MAIN_FRAME,
     });
-    expect(
-      matchesRegex(
-        ticketAllow,
-        'https://youth.cqu.edu.cn/callback?state=x&ticket=synthetic',
-      ),
-    ).toBe(true);
-    expect(
-      matchesRegex(
-        ticketAllow,
-        'https://youth.cqu.edu.cn/start?service=https%3A%2F%2Fclient.example%2Fcallback%3Fticket%3Dsynthetic',
-      ),
-    ).toBe(false);
+  });
+
+  it.each([
+    'https://youth.cqu.edu.cn/callback?ticket=synthetic',
+    'https://youth.cqu.edu.cn/callback?state=x&ticket=synthetic',
+    'https://youth.cqu.edu.cn/callback?ticket',
+    'https://youth.cqu.edu.cn/callback?ticket&state=x',
+    'https://youth.cqu.edu.cn/callback?state=x&ticket#part',
+    'https://youth.cqu.edu.cn/callback?t%69cket=synthetic',
+    'https://youth.cqu.edu.cn/callback?%74%69%63%6b%65%74=synthetic',
+    'https://youth.cqu.edu.cn/callback?%74%69%63%6B%65%74=synthetic',
+  ])('allows an exact decoded lowercase top-level ticket key in %s', (input) => {
+    expect(matchesRegex(compileTicketAllowForTest(), input)).toBe(true);
+  });
+
+  it.each([
+    'https://youth.cqu.edu.cn/callback?Ticket=synthetic',
+    'https://youth.cqu.edu.cn/callback?%54icket=synthetic',
+    'https://youth.cqu.edu.cn/callback?ticketing=synthetic',
+    'https://youth.cqu.edu.cn/callback?foo%26ticket=synthetic',
+    'https://youth.cqu.edu.cn/callback?name=ticket=synthetic',
+    'https://youth.cqu.edu.cn/start?service=https%3A%2F%2Fclient.example%2Fcallback%3Fticket%3Dsynthetic',
+    'https://youth.cqu.edu.cn/start?service=x%26t%2569cket%3Dsynthetic',
+  ])('does not allow non-top-level or non-exact ticket text in %s', (input) => {
+    expect(matchesRegex(compileTicketAllowForTest(), input)).toBe(false);
   });
 
   it.each([

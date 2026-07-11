@@ -59,6 +59,18 @@ test.describe('loaded extension redirects', () => {
     await expect.poll(() => rewriteRecord(extension, tabId)).toBeNull();
   });
 
+  test('leaves an encoded valueless top-level CAS ticket callback on the original host', async ({ extension }) => {
+    const page = await extension.context.newPage();
+
+    await page.goto('https://sso.cqu.edu.cn/login?t%69cket');
+
+    const callback = new URL(page.url());
+    expect(callback.hostname).toBe('sso.cqu.edu.cn');
+    expect(callback.searchParams.has('ticket')).toBe(true);
+    const tabId = await activeTabId(extension, page);
+    await expect.poll(() => rewriteRecord(extension, tabId)).toBeNull();
+  });
+
   test('uses queryless Youth DNR mapping and Chromium fragment inheritance', async ({ extension }) => {
     const page = await extension.context.newPage();
 

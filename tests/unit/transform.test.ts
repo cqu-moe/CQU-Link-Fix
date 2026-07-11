@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   applyTransformer,
   assertCasServicePreserved,
+  hasTopLevelCasTicket,
   isAtrustUrl,
   isCquDomain,
   toAtrustDomainUrl,
@@ -149,6 +150,28 @@ describe('invariants', () => {
     const after =
       'https://sso-cqu-edu-cn-s.atrust.cqu.edu.cn/login?service=https%3A%2F%2Ffirst.cqu.edu.cn%2Fcb&service=https%3A%2F%2Fevil.example%2Fcb';
     expect(() => assertCasServicePreserved(before, after)).toThrow('CAS service changed');
+  });
+});
+
+describe('top-level CAS ticket detection', () => {
+  it.each([
+    'https://client.cqu.edu.cn/callback?ticket=synthetic',
+    'https://client.cqu.edu.cn/callback?state=x&ticket',
+    'https://client.cqu.edu.cn/callback?t%69cket=synthetic',
+    'https://client.cqu.edu.cn/callback?%74%69%63%6b%65%74=synthetic',
+    'https://client.cqu.edu.cn/callback?%74%69%63%6B%65%74=synthetic',
+  ])('recognizes the exact decoded lowercase key in %s', (input) => {
+    expect(hasTopLevelCasTicket(new URL(input))).toBe(true);
+  });
+
+  it.each([
+    'https://client.cqu.edu.cn/callback?Ticket=synthetic',
+    'https://client.cqu.edu.cn/callback?%54icket=synthetic',
+    'https://client.cqu.edu.cn/callback?ticketing=synthetic',
+    'https://client.cqu.edu.cn/callback?foo%26ticket=synthetic',
+    'https://client.cqu.edu.cn/start?service=https%3A%2F%2Fclient.example%2Fcallback%3Fticket%3Dsynthetic',
+  ])('rejects non-top-level or non-exact ticket text in %s', (input) => {
+    expect(hasTopLevelCasTicket(new URL(input))).toBe(false);
   });
 });
 

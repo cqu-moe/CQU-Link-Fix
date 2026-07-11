@@ -164,7 +164,7 @@ function compileTicketAllow(): Browser.declarativeNetRequest.Rule {
     action: { type: 'allow' },
     condition: {
       regexFilter:
-        '^https?://[^?#]+\\?(?:[^#&]*&)*ticket=[^#&]*(?:&[^#&]*)*(?:#.*)?$',
+        '^https?://[^?#]+\\?(?:[^#&]*&)*(?:t|%74)(?:i|%69)(?:c|%63)(?:k|%6[bB])(?:e|%65)(?:t|%74)(?:=[^#&]*)?(?:&[^#&]*)*(?:#.*)?$',
       isUrlFilterCaseSensitive: true,
       resourceTypes: MAIN_FRAME,
     },
