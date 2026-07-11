@@ -3,11 +3,13 @@ import { beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest'
 import { fakeBrowser } from 'wxt/testing/fake-browser';
 import {
   DEFAULT_SETTINGS,
+  loadSettingsSnapshot,
   loadSettings,
   replaceSettingsViaBackground,
   saveSettings,
   setAllCquMode,
   updateSettings,
+  validateEditableSettings,
 } from '../../src/storage/settings';
 import type { CustomRule } from '../../src/rules/types';
 
@@ -131,12 +133,61 @@ describe('settings storage', () => {
   });
 
   it('exposes a Task 8 client seam that requests complete background replacement', async () => {
-    const next = { ...DEFAULT_SETTINGS, enabled: false };
-    const sendMessage = mockSendMessage().mockResolvedValue({ ok: true });
+    const { enableAllCquDomains: _, ...next } = { ...DEFAULT_SETTINGS, enabled: false };
+    const sendMessage = mockSendMessage().mockResolvedValue({ ok: true, revision: 4 });
 
-    await expect(replaceSettingsViaBackground(next)).resolves.toBe(true);
+    await expect(replaceSettingsViaBackground(next, 3)).resolves.toEqual({ ok: true, revision: 4 });
 
-    expect(sendMessage).toHaveBeenCalledWith({ type: 'replace-settings', settings: next });
+    expect(sendMessage).toHaveBeenCalledWith({
+      type: 'replace-settings', settings: next, expectedRevision: 3,
+    });
+  });
+
+  it('increments a persisted revision for every queued settings write', async () => {
+    await saveSettings(DEFAULT_SETTINGS);
+    expect((await loadSettingsSnapshot()).revision).toBe(1);
+    await updateSettings((current) => ({ ...current, enabled: false }));
+    expect(await loadSettingsSnapshot()).toMatchObject({ revision: 2, settings: { enabled: false } });
+  });
+
+  it('normalizes replaceable arrays and rejects unsafe or colliding custom rules', () => {
+    const base = {
+      enabled: true,
+      disabledBuiltInRuleIds: [' core-sso ', 'core-sso'],
+      excludedHosts: [' B.CQU.EDU.CN ', 'b.cqu.edu.cn'],
+      customRules: [createCustomRule()],
+    };
+    expect(validateEditableSettings(base)).toMatchObject({
+      disabledBuiltInRuleIds: ['core-sso'], excludedHosts: ['b.cqu.edu.cn'],
+    });
+    expect(() => validateEditableSettings({
+      ...base, customRules: [{ ...createCustomRule(), id: 'core-sso' }],
+    })).toThrow(/rule ID/i);
+    expect(() => validateEditableSettings({
+      ...base, customRules: [{ ...createCustomRule(), dnrId: 1001 }],
+    })).toThrow(/DNR/i);
+    expect(() => validateEditableSettings({
+      ...base,
+      customRules: [createCustomRule(), { ...createCustomRule(), id: 'other', dnrId: 3001 }],
+    })).toThrow(/DNR/i);
+    expect(() => validateEditableSettings({
+      ...base,
+      customRules: [{
+        ...createCustomRule(), matcher: { kind: 'host', host: 'x.atrust.cqu.edu.cn' },
+      }],
+    })).toThrow(/host rule/i);
+    expect(() => validateEditableSettings({
+      ...base,
+      customRules: [{ ...createCustomRule(), matcher: { kind: 'host', host: 'example.com' } }],
+    })).toThrow(/host rule/i);
+    expect(() => validateEditableSettings({
+      ...base,
+      customRules: [{
+        ...createCustomRule(),
+        matcher: { kind: 'host-port', host: '1.1.1.1', port: 443 },
+        transformer: 'atrust-ip-port',
+      }],
+    })).toThrow(/matcher kind/i);
   });
 
   it('serializes concurrent mutators without losing fields or hosts', async () => {

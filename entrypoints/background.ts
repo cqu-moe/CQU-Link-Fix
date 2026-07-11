@@ -22,17 +22,22 @@ import { decideRegisteredRewrite, getEnabledRules } from '../src/rules/registry'
 import { compareRulePrecedence, reconcileDynamicRules } from '../src/rules/dnr';
 import type { RuleDefinition } from '../src/rules/types';
 import {
+  allocateNavigationSequence,
+  clearCommittedNavigation,
+  commitNavigation,
+  getCommittedNavigationSequence,
+} from '../src/background/navigation-state';
+import {
+  loadSettingsSnapshot,
   loadSettings,
-  saveSettings,
-  updateSettings,
-  validateExtensionSettings,
+  replaceSettingsAtRevision,
+  SettingsRevisionConflict,
+  updateSettingsSnapshot,
 } from '../src/storage/settings';
 
 let reconciliationQueue = Promise.resolve();
 const latestTopFrameNavigation = new Map<number, symbol>();
 const tabFinalizationQueues = new Map<number, Promise<void>>();
-const latestCommittedNavigationSequence = new Map<number, number>();
-const latestTabEventSequence = new Map<number, number>();
 let recordGeneration = 0;
 
 function scheduleReconciliation(): void {
@@ -110,12 +115,6 @@ async function finalizeWinningRewrite(
       await browser.tabs.update(record.tabId, { url: targetToNavigate });
     }
   });
-}
-
-function nextTabEventSequence(tabId: number): number {
-  const sequence = (latestTabEventSequence.get(tabId) ?? 0) + 1;
-  latestTabEventSequence.set(tabId, sequence);
-  return sequence;
 }
 
 function nextRecordGeneration(details: { tabId: number }, sequence: number): string {
@@ -197,10 +196,10 @@ function scheduleTopFrameRewrite(
   details: Browser.webNavigation.WebNavigationBaseCallbackDetails,
 ): void {
   if (details.frameId !== 0 || details.tabId < 0 || details.tabId > MAX_BYPASS_TAB_ID) return;
-  const navigationSequence = nextTabEventSequence(details.tabId);
   const navigationToken = Symbol('top-frame-navigation');
   latestTopFrameNavigation.set(details.tabId, navigationToken);
-  void rewriteTopFrameNavigation(details, navigationToken, navigationSequence)
+  void allocateNavigationSequence()
+    .then((navigationSequence) => rewriteTopFrameNavigation(details, navigationToken, navigationSequence))
     .catch((error: unknown) => {
       console.error('Failed to rewrite top-frame navigation', error);
     })
@@ -215,18 +214,21 @@ async function dispatchBackgroundMessage(
   message: BackgroundMessage,
 ): Promise<BackgroundResponse> {
   if (message.type === 'replace-settings') {
-    await saveSettings(validateExtensionSettings(message.settings));
-    return { ok: true };
+    const snapshot = await replaceSettingsAtRevision(message.settings, message.expectedRevision);
+    return { ok: true, revision: snapshot.revision };
+  }
+  if (message.type === 'get-settings-snapshot') {
+    return { ok: true, snapshot: await loadSettingsSnapshot() };
   }
   if (message.type === 'persist-all-cqu-mode') {
     if (typeof message.enabled !== 'boolean') {
       throw new Error('All-CQU mode must be a boolean');
     }
-    await updateSettings((current) => ({
+    const snapshot = await updateSettingsSnapshot((current) => ({
       ...current,
       enableAllCquDomains: message.enabled,
     }));
-    return { ok: true };
+    return { ok: true, revision: snapshot.revision };
   }
   if (message.type === 'get-tab-state') {
     return { ok: true, state: await getTabState(message.tabId) };
@@ -252,8 +254,11 @@ function handleRuntimeMessage(
   ) {
     return undefined;
   }
-  return dispatchBackgroundMessage(message).catch(() => {
-    return { ok: false, error: 'Background operation failed' };
+  return dispatchBackgroundMessage(message).catch((error: unknown) => {
+    if (error instanceof SettingsRevisionConflict) {
+      return { ok: false, code: 'settings-conflict', error: error.message };
+    }
+    return { ok: false, code: 'operation-failed', error: 'Background operation failed' };
   });
 }
 
@@ -261,12 +266,9 @@ function handleCommittedNavigation(
   details: Browser.webNavigation.WebNavigationTransitionCallbackDetails,
 ): void {
   if (details.frameId !== 0 || details.tabId < 0 || details.tabId > MAX_BYPASS_TAB_ID) return;
-  latestCommittedNavigationSequence.set(
-    details.tabId,
-    nextTabEventSequence(details.tabId),
-  );
   scheduleSafely('Failed to finalize committed navigation', () =>
     queueTabFinalization(details.tabId, async () => {
+      await commitNavigation(details.tabId);
       const nonce = await getOriginalBypassNonce(details.tabId, details.url);
       if (nonce) await clearTabSession(details.tabId, nonce);
       await browser.action.setBadgeText({ tabId: details.tabId, text: '' });
@@ -288,10 +290,10 @@ function handleNavigationError(
       }
 
       const record = await getTabState(details.tabId);
+      const committedSequence = await getCommittedNavigationSequence(details.tabId);
       if (
         !record ||
-        (latestCommittedNavigationSequence.get(details.tabId) ?? -Infinity) >
-          record.navigationSequence ||
+        committedSequence > record.navigationSequence ||
         !sameRequestUrl(details.url, record.targetUrl)
       ) {
         return;
@@ -299,10 +301,10 @@ function handleNavigationError(
       const generation = record.generation;
       await recordRewrite({ ...record, error: details.error });
       const latestBeforeBadge = await getTabState(details.tabId);
+      const committedBeforeBadge = await getCommittedNavigationSequence(details.tabId);
       if (
         latestBeforeBadge?.generation !== generation ||
-        (latestCommittedNavigationSequence.get(details.tabId) ?? -Infinity) >
-          record.navigationSequence
+        committedBeforeBadge > record.navigationSequence
       ) {
         return;
       }
@@ -311,10 +313,10 @@ function handleNavigationError(
         browser.action.setBadgeText({ tabId: details.tabId, text: '!' }),
       ]);
       const latestAfterBadge = await getTabState(details.tabId);
+      const committedAfterBadge = await getCommittedNavigationSequence(details.tabId);
       if (
         latestAfterBadge?.generation !== generation ||
-        (latestCommittedNavigationSequence.get(details.tabId) ?? -Infinity) >
-          record.navigationSequence
+        committedAfterBadge > record.navigationSequence
       ) {
         await browser.action.setBadgeText({ tabId: details.tabId, text: '' });
       }
@@ -326,16 +328,18 @@ function handleTabRemoved(tabId: number): void {
   if (tabId < 0 || tabId > MAX_BYPASS_TAB_ID) return;
   latestTopFrameNavigation.delete(tabId);
   scheduleSafely('Failed to clear removed tab session', () =>
-    queueTabFinalization(tabId, () => clearTabSession(tabId)),
+    queueTabFinalization(tabId, async () => {
+      try {
+        await clearTabSession(tabId);
+      } finally {
+        await clearCommittedNavigation(tabId);
+      }
+    }),
   );
-  latestCommittedNavigationSequence.delete(tabId);
-  latestTabEventSequence.delete(tabId);
 }
 
 export default defineBackground(() => {
   latestTopFrameNavigation.clear();
-  latestCommittedNavigationSequence.clear();
-  latestTabEventSequence.clear();
   recordGeneration = 0;
   scheduleReconciliation();
   browser.runtime.onInstalled.addListener(scheduleReconciliation);

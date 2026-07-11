@@ -14,6 +14,7 @@ import {
 import {
   DEFAULT_SETTINGS,
   loadSettings,
+  loadSettingsSnapshot,
   saveSettings,
   updateSettings,
 } from '../../src/storage/settings';
@@ -478,8 +479,8 @@ describe('background rewrite recording and bypass', () => {
       resetBackgroundEvents();
       await saveSettings(testCase.settings);
       const order: string[] = [];
-      vi.spyOn(browser.storage.session, 'set').mockImplementation(async () => {
-        order.push('record');
+      vi.spyOn(browser.storage.session, 'set').mockImplementation(async (items) => {
+        if ('rewrite:7' in items) order.push('record');
       });
       mockUpdateTab().mockImplementation(async () => {
         order.push('navigate');
@@ -845,6 +846,51 @@ describe('background session lifecycle, errors, and messages', () => {
     expect(await browser.action.getBadgeText({ tabId: 7 })).toBe('');
   });
 
+  it('suppresses an old error from a persisted committed waterline after restart', async () => {
+    const record = rewriteRecord({ navigationSequence: 40 });
+    await recordRewrite(record);
+    await browser.storage.session.set({
+      'navigation:sequence': 41,
+      'navigation:committed:7': 41,
+    });
+    await startBackground();
+
+    await fakeBrowser.webNavigation.onErrorOccurred.trigger(errorDetails(record.targetUrl));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect((await getTabState(7))?.error).toBeUndefined();
+    expect(await browser.action.getBadgeText({ tabId: 7 })).toBe('');
+  });
+
+  it('allocates rewrite ordering from the persisted global counter after restart', async () => {
+    await browser.storage.session.set({ 'navigation:sequence': 90 });
+    await saveSettings({ ...DEFAULT_SETTINGS, enableAllCquDomains: true });
+    mockUpdateTab().mockResolvedValue(undefined);
+    await startBackground();
+
+    await fakeBrowser.webNavigation.onBeforeNavigate.trigger(
+      navigationDetails('https://library.cqu.edu.cn/restarted'),
+    );
+
+    await vi.waitFor(() => expect(getTabState(7)).resolves.toMatchObject({ navigationSequence: 91 }));
+  });
+
+  it('removes only the per-tab committed waterline when a tab closes', async () => {
+    await browser.storage.session.set({
+      'navigation:sequence': 12,
+      'navigation:committed:7': 12,
+    });
+    await startBackground();
+    await fakeBrowser.tabs.onRemoved.trigger(7, { isWindowClosing: false, windowId: 1 });
+
+    await vi.waitFor(async () => {
+      const state = await browser.storage.session.get([
+        'navigation:sequence', 'navigation:committed:7',
+      ]);
+      expect(state).toEqual({ 'navigation:sequence': 12 });
+    });
+  });
+
   it('contains synchronous lifecycle badge throws instead of rejecting the listener', async () => {
     await recordRewrite(rewriteRecord());
     vi.spyOn(browser.action, 'setBadgeText').mockImplementation(() => {
@@ -913,7 +959,9 @@ describe('background session lifecycle, errors, and messages', () => {
         { type: 'open-original-once', tabId: 7 },
         trustedPopup,
       ),
-    ).resolves.toEqual([{ ok: false, error: expect.any(String) }]);
+    ).resolves.toEqual([{
+      ok: false, code: 'operation-failed', error: expect.any(String),
+    }]);
     expect(consoleError).not.toHaveBeenCalled();
   });
 
@@ -933,17 +981,17 @@ describe('background session lifecycle, errors, and messages', () => {
         transformer: 'atrust-ip-port',
       }],
     },
-  ])('returns a typed error for malformed replacement settings without writing: %#', async (settings) => {
+  ])('ignores malformed replacement settings before dispatch without writing: %#', async (settings) => {
     await saveSettings(DEFAULT_SETTINGS);
     await startBackground();
     const storageSet = vi.spyOn(browser.storage.local, 'set');
 
     await expect(
       fakeBrowser.runtime.onMessage.trigger(
-        { type: 'replace-settings', settings },
+        { type: 'replace-settings', settings, expectedRevision: 1 },
         { id: browser.runtime.id },
       ),
-    ).resolves.toEqual([{ ok: false, error: expect.any(String) }]);
+    ).resolves.toEqual([undefined]);
 
     expect(storageSet).not.toHaveBeenCalled();
     expect(await loadSettings()).toEqual(DEFAULT_SETTINGS);
@@ -951,6 +999,7 @@ describe('background session lifecycle, errors, and messages', () => {
 
   it('serializes an independent UI replacement with background exclusion and mode persistence', async () => {
     await saveSettings(DEFAULT_SETTINGS);
+    const expectedRevision = (await loadSettingsSnapshot()).revision;
     await startBackground();
     mockGetTab().mockResolvedValue(tab('https://second.cqu.edu.cn/path'));
     const originalSet = browser.storage.local.set.bind(browser.storage.local) as (
@@ -973,14 +1022,15 @@ describe('background session lifecycle, errors, and messages', () => {
       transformer: 'atrust-domain' as const,
     };
     const replacement = {
-      ...DEFAULT_SETTINGS,
+      enabled: DEFAULT_SETTINGS.enabled,
+      disabledBuiltInRuleIds: DEFAULT_SETTINGS.disabledBuiltInRuleIds,
       customRules: [customRule],
       excludedHosts: ['first.cqu.edu.cn'],
     };
     const sender = { id: browser.runtime.id };
 
     const replacing = fakeBrowser.runtime.onMessage.trigger(
-      { type: 'replace-settings', settings: replacement },
+      { type: 'replace-settings', settings: replacement, expectedRevision },
       sender,
     );
     await vi.waitFor(() => expect(storageSet).toHaveBeenCalledTimes(1));
@@ -996,13 +1046,62 @@ describe('background session lifecycle, errors, and messages', () => {
     );
     releaseReplacement.resolve();
 
-    await expect(replacing).resolves.toEqual([{ ok: true }]);
+    await expect(replacing).resolves.toEqual([{ ok: true, revision: expectedRevision + 1 }]);
     await expect(excluding).resolves.toEqual([{ ok: true }]);
-    await expect(settingMode).resolves.toEqual([{ ok: true }]);
+    await expect(settingMode).resolves.toEqual([{ ok: true, revision: expectedRevision + 3 }]);
     expect(await loadSettings()).toEqual({
       ...replacement,
       enableAllCquDomains: true,
       excludedHosts: ['first.cqu.edu.cn', 'second.cqu.edu.cn'],
+    });
+  });
+
+  it('uses settings CAS so two clients cannot silently overwrite each other', async () => {
+    await saveSettings(DEFAULT_SETTINGS);
+    await startBackground();
+    const sender = { id: browser.runtime.id };
+    const snapshot = (await fakeBrowser.runtime.onMessage.trigger(
+      { type: 'get-settings-snapshot' }, sender,
+    ))[0] as unknown as { ok: true; snapshot: { revision: number } };
+    const editable = {
+      enabled: false,
+      disabledBuiltInRuleIds: [],
+      customRules: [],
+      excludedHosts: ['first.cqu.edu.cn'],
+    };
+    await expect(fakeBrowser.runtime.onMessage.trigger(
+      { type: 'replace-settings', settings: editable, expectedRevision: snapshot.snapshot.revision }, sender,
+    )).resolves.toEqual([{ ok: true, revision: snapshot.snapshot.revision + 1 }]);
+    await expect(fakeBrowser.runtime.onMessage.trigger(
+      { type: 'replace-settings', settings: { ...editable, enabled: true }, expectedRevision: snapshot.snapshot.revision }, sender,
+    )).resolves.toEqual([{
+      ok: false, code: 'settings-conflict', error: expect.any(String),
+    }]);
+    expect(await loadSettings()).toMatchObject({ enabled: false, excludedHosts: ['first.cqu.edu.cn'] });
+  });
+
+  it('rejects a stale UI replacement after a later background mode write', async () => {
+    await saveSettings(DEFAULT_SETTINGS);
+    const expectedRevision = (await loadSettingsSnapshot()).revision;
+    await startBackground();
+    const sender = { id: browser.runtime.id };
+
+    await expect(fakeBrowser.runtime.onMessage.trigger(
+      { type: 'persist-all-cqu-mode', enabled: true }, sender,
+    )).resolves.toEqual([{ ok: true, revision: expectedRevision + 1 }]);
+    await expect(fakeBrowser.runtime.onMessage.trigger({
+      type: 'replace-settings',
+      expectedRevision,
+      settings: {
+        enabled: false, disabledBuiltInRuleIds: [], customRules: [], excludedHosts: [],
+      },
+    }, sender)).resolves.toEqual([{
+      ok: false, code: 'settings-conflict', error: expect.any(String),
+    }]);
+
+    expect(await loadSettingsSnapshot()).toEqual({
+      revision: expectedRevision + 1,
+      settings: { ...DEFAULT_SETTINGS, enableAllCquDomains: true },
     });
   });
 
@@ -1013,7 +1112,9 @@ describe('background session lifecycle, errors, and messages', () => {
 
     await expect(
       fakeBrowser.runtime.onMessage.trigger(
-        { type: 'replace-settings', settings: { ...DEFAULT_SETTINGS, enabled: false } },
+        { type: 'replace-settings', settings: {
+          enabled: false, disabledBuiltInRuleIds: [], customRules: [], excludedHosts: [],
+        }, expectedRevision: 1 },
         { id: 'untrusted-extension' },
       ),
     ).resolves.toEqual([undefined]);

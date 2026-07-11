@@ -1,5 +1,6 @@
 import type { CustomRule } from '../rules/types';
 import type { BackgroundResponse } from '../messages';
+import { BUILT_IN_RULES } from '../rules/builtins';
 
 export interface ExtensionSettings {
   enabled: boolean;
@@ -8,6 +9,12 @@ export interface ExtensionSettings {
   customRules: CustomRule[];
   excludedHosts: string[];
 }
+
+export type EditableSettings = Omit<ExtensionSettings, 'enableAllCquDomains'>;
+export interface SettingsSnapshot { settings: ExtensionSettings; revision: number }
+export type ReplaceSettingsResult =
+  | { ok: true; revision: number }
+  | { ok: false; code: 'settings-conflict' | 'operation-failed'; error: string };
 
 export const DEFAULT_SETTINGS: ExtensionSettings = {
   enabled: true,
@@ -18,56 +25,87 @@ export const DEFAULT_SETTINGS: ExtensionSettings = {
 };
 
 const SETTINGS_KEY = 'settings';
+const SETTINGS_REVISION_KEY = 'settingsRevision';
 const CQU_OPTIONAL_ORIGINS = {
   origins: ['*://cqu.edu.cn/*', '*://*.cqu.edu.cn/*'],
 };
 const MAX_DNR_RULE_ID = 2_147_483_647;
-const BUILT_IN_DNR_IDS = new Set([1_001, 2_001]);
+const BUILT_IN_RULE_IDS = new Set(BUILT_IN_RULES.map((rule) => rule.id));
+const BUILT_IN_DNR_IDS = new Set(BUILT_IN_RULES.map((rule) => rule.dnrId));
 const EXCLUSION_DNR_ID_START = 80_000;
 let settingsWriteQueue = Promise.resolve();
 
 export async function loadSettings(): Promise<ExtensionSettings> {
-  const stored = await browser.storage.local.get(SETTINGS_KEY);
+  return (await loadSettingsSnapshot()).settings;
+}
+
+export async function loadSettingsSnapshot(): Promise<SettingsSnapshot> {
+  const stored = await browser.storage.local.get([SETTINGS_KEY, SETTINGS_REVISION_KEY]);
   const merged = {
     ...DEFAULT_SETTINGS,
     ...(stored[SETTINGS_KEY] as Partial<ExtensionSettings> | undefined),
   };
-  return structuredClone(merged);
+  const revision = stored[SETTINGS_REVISION_KEY];
+  return {
+    settings: structuredClone(merged),
+    revision: Number.isSafeInteger(revision) && (revision as number) >= 0 ? revision as number : 0,
+  };
 }
 
 export async function saveSettings(next: ExtensionSettings): Promise<void> {
   const snapshot = structuredClone(next);
   await queueSettingsWrite(async () => {
-    await writeSettings(snapshot);
+    const current = await loadSettingsSnapshot();
+    await writeSettings(snapshot, current.revision + 1);
   });
 }
 
 export async function replaceSettingsViaBackground(
-  next: ExtensionSettings,
-): Promise<boolean> {
-  return sendSettingsMessage({
+  next: EditableSettings,
+  expectedRevision: number,
+): Promise<ReplaceSettingsResult> {
+  return sendSettingsMutationMessage({
     type: 'replace-settings',
     settings: structuredClone(next),
+    expectedRevision,
   });
 }
 
-async function persistAllCquModeViaBackground(enabled: boolean): Promise<boolean> {
-  return sendSettingsMessage({ type: 'persist-all-cqu-mode', enabled });
+export async function getSettingsSnapshotViaBackground(): Promise<SettingsSnapshot | null> {
+  try {
+    const response = await browser.runtime.sendMessage({ type: 'get-settings-snapshot' }) as BackgroundResponse | undefined;
+    return response?.ok === true && 'snapshot' in response ? structuredClone(response.snapshot) : null;
+  } catch { return null; }
 }
 
-async function sendSettingsMessage(message: unknown): Promise<boolean> {
+async function persistAllCquModeViaBackground(enabled: boolean): Promise<boolean> {
+  return (await sendSettingsMutationMessage({ type: 'persist-all-cqu-mode', enabled })).ok;
+}
+
+async function sendSettingsMutationMessage(message: unknown): Promise<ReplaceSettingsResult> {
   try {
     const response = (await browser.runtime.sendMessage(message)) as
       | BackgroundResponse
       | undefined;
-    return response?.ok === true;
+    if (response?.ok === true) {
+      return { ok: true, revision: 'revision' in response ? response.revision : 0 };
+    }
+    if (response?.ok === false) return {
+      ok: false,
+      code: response.code === 'settings-conflict' ? 'settings-conflict' : 'operation-failed',
+      error: response.error,
+    };
+    return { ok: false, code: 'operation-failed', error: 'Background operation failed' };
   } catch {
-    return false;
+    return { ok: false, code: 'operation-failed', error: 'Background operation failed' };
   }
 }
 
-async function writeSettings(next: ExtensionSettings): Promise<void> {
-  await browser.storage.local.set({ [SETTINGS_KEY]: structuredClone(next) });
+async function writeSettings(next: ExtensionSettings, revision: number): Promise<void> {
+  await browser.storage.local.set({
+    [SETTINGS_KEY]: structuredClone(next),
+    [SETTINGS_REVISION_KEY]: revision,
+  });
 }
 
 function queueSettingsWrite<T>(operation: () => Promise<T>): Promise<T> {
@@ -82,11 +120,37 @@ function queueSettingsWrite<T>(operation: () => Promise<T>): Promise<T> {
 export async function updateSettings(
   mutator: (current: ExtensionSettings) => ExtensionSettings | Promise<ExtensionSettings>,
 ): Promise<ExtensionSettings> {
+  return (await updateSettingsSnapshot(mutator)).settings;
+}
+
+export async function updateSettingsSnapshot(
+  mutator: (current: ExtensionSettings) => ExtensionSettings | Promise<ExtensionSettings>,
+): Promise<SettingsSnapshot> {
   return queueSettingsWrite(async () => {
-    const current = await loadSettings();
-    const next = structuredClone(await mutator(current));
-    await writeSettings(next);
-    return structuredClone(next);
+    const snapshot = await loadSettingsSnapshot();
+    const next = structuredClone(await mutator(snapshot.settings));
+    const revision = snapshot.revision + 1;
+    await writeSettings(next, revision);
+    return { settings: structuredClone(next), revision };
+  });
+}
+
+export class SettingsRevisionConflict extends Error {
+  constructor() { super('Settings changed since they were loaded'); this.name = 'SettingsRevisionConflict'; }
+}
+
+export async function replaceSettingsAtRevision(
+  editable: EditableSettings,
+  expectedRevision: number,
+): Promise<SettingsSnapshot> {
+  return queueSettingsWrite(async () => {
+    const current = await loadSettingsSnapshot();
+    if (current.revision !== expectedRevision) throw new SettingsRevisionConflict();
+    const validated = validateEditableSettings(editable);
+    const settings = { ...validated, enableAllCquDomains: current.settings.enableAllCquDomains };
+    const revision = current.revision + 1;
+    await writeSettings(settings, revision);
+    return { settings: structuredClone(settings), revision };
   });
 }
 
@@ -147,9 +211,23 @@ export function validateExtensionSettings(value: unknown): ExtensionSettings {
   ])) {
     throw new Error('Settings payload has an invalid shape');
   }
-  if (typeof value.enabled !== 'boolean' || typeof value.enableAllCquDomains !== 'boolean') {
+  if (typeof value.enableAllCquDomains !== 'boolean') {
     throw new Error('Settings switches must be booleans');
   }
+  const editable = validateEditableSettings({
+    enabled: value.enabled,
+    disabledBuiltInRuleIds: value.disabledBuiltInRuleIds,
+    customRules: value.customRules,
+    excludedHosts: value.excludedHosts,
+  });
+  return { ...editable, enableAllCquDomains: value.enableAllCquDomains };
+}
+
+export function validateEditableSettings(value: unknown): EditableSettings {
+  if (!isPlainObject(value) || !hasExactKeys(value, [
+    'customRules', 'disabledBuiltInRuleIds', 'enabled', 'excludedHosts',
+  ])) throw new Error('Editable settings payload has an invalid shape');
+  if (typeof value.enabled !== 'boolean') throw new Error('Settings switches must be booleans');
   const disabledBuiltInRuleIds = parseStringArray(
     value.disabledBuiltInRuleIds,
     'disabled rule IDs',
@@ -161,12 +239,15 @@ export function validateExtensionSettings(value: unknown): ExtensionSettings {
       return normalized;
     });
   if (!Array.isArray(value.customRules)) throw new Error('Custom rules must be an array');
+  const normalizedExcludedHosts = [...new Set(excludedHosts)].sort();
   const customRules = value.customRules.map(parseCustomRule);
-  const ruleIds = new Set<string>();
+  const ruleIds = new Set<string>(BUILT_IN_RULE_IDS);
   const dnrIds = new Set<number>();
-  const exclusionIds = new Set(excludedHosts.map((_, index) => EXCLUSION_DNR_ID_START + index));
+  const exclusionIds = new Set(
+    normalizedExcludedHosts.map((_, index) => EXCLUSION_DNR_ID_START + index),
+  );
   for (const rule of customRules) {
-    if (ruleIds.has(rule.id)) throw new Error(`Duplicate custom rule ID: ${rule.id}`);
+    if (ruleIds.has(rule.id)) throw new Error(`Colliding custom rule ID: ${rule.id}`);
     if (
       dnrIds.has(rule.dnrId) ||
       BUILT_IN_DNR_IDS.has(rule.dnrId) ||
@@ -179,10 +260,9 @@ export function validateExtensionSettings(value: unknown): ExtensionSettings {
   }
   return {
     enabled: value.enabled,
-    enableAllCquDomains: value.enableAllCquDomains,
-    disabledBuiltInRuleIds,
+    disabledBuiltInRuleIds: [...new Set(disabledBuiltInRuleIds.map((id) => id.trim()))].sort(),
     customRules,
-    excludedHosts: [...new Set(excludedHosts)].sort(),
+    excludedHosts: normalizedExcludedHosts,
   };
 }
 
@@ -221,40 +301,16 @@ function parseCustomRule(value: unknown): CustomRule {
       throw new Error('Custom host matcher has an invalid shape');
     }
     const host = normalizeDnsHost(value.matcher.host);
-    if (!host || !host.includes('.') || isCanonicalIpv4(host) || value.transformer !== 'atrust-domain') {
+    if (
+      !host ||
+      !(host === 'cqu.edu.cn' || host.endsWith('.cqu.edu.cn')) ||
+      host === 'atrust.cqu.edu.cn' ||
+      host.endsWith('.atrust.cqu.edu.cn') ||
+      value.transformer !== 'atrust-domain'
+    ) {
       throw new Error('Custom host rule is invalid');
     }
     matcher = { kind: 'host', host };
-  } else if (value.matcher.kind === 'host-port') {
-    if (!hasExactKeys(value.matcher, ['host', 'kind', 'port'])) {
-      throw new Error('Custom host-port matcher has an invalid shape');
-    }
-    if (
-      typeof value.matcher.host !== 'string' ||
-      !isCanonicalIpv4(value.matcher.host) ||
-      !Number.isInteger(value.matcher.port) ||
-      (value.matcher.port as number) < 1 ||
-      (value.matcher.port as number) > 65_535 ||
-      value.transformer !== 'atrust-ip-port'
-    ) {
-      throw new Error('Custom host-port rule is invalid');
-    }
-    matcher = {
-      kind: 'host-port',
-      host: value.matcher.host,
-      port: value.matcher.port as number,
-    };
-  } else if (value.matcher.kind === 'youth-article') {
-    if (!hasExactKeys(value.matcher, ['host', 'kind'])) {
-      throw new Error('Custom Youth matcher has an invalid shape');
-    }
-    if (
-      value.matcher.host !== 'youth.cqu.edu.cn' ||
-      value.transformer !== 'youth-public'
-    ) {
-      throw new Error('Custom Youth rule is invalid');
-    }
-    matcher = { kind: 'youth-article', host: 'youth.cqu.edu.cn' };
   } else {
     throw new Error('Custom matcher kind is invalid');
   }
@@ -294,13 +350,6 @@ function normalizeDnsHost(value: unknown): string | null {
     return null;
   }
   return normalized;
-}
-
-function isCanonicalIpv4(host: string): boolean {
-  return (
-    /^(?:0|[1-9]\d{0,2})(?:\.(?:0|[1-9]\d{0,2})){3}$/.test(host) &&
-    host.split('.').every((octet) => Number(octet) <= 255)
-  );
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
