@@ -6,6 +6,7 @@ import {
   loadSettings,
   saveSettings,
   setAllCquMode,
+  updateSettings,
 } from '../../src/storage/settings';
 import type { CustomRule } from '../../src/rules/types';
 
@@ -108,6 +109,60 @@ describe('settings storage', () => {
     firstLoad.customRules[0]!.matcher.host = 'mutated.example';
 
     expect((await loadSettings()).customRules[0]!.matcher.host).toBe('1.1.1.1');
+  });
+
+  it('serializes concurrent mutators without losing fields or hosts', async () => {
+    await saveSettings(DEFAULT_SETTINGS);
+    const firstStarted = deferred<void>();
+    const releaseFirst = deferred<void>();
+    const addHost = updateSettings(async (current) => {
+      firstStarted.resolve();
+      await releaseFirst.promise;
+      return { ...current, excludedHosts: [...current.excludedHosts, 'one.cqu.edu.cn'] };
+    });
+    await firstStarted.promise;
+    const customRule = createCustomRule();
+    const addRule = updateSettings((current) => ({
+      ...current,
+      customRules: [...current.customRules, customRule],
+      excludedHosts: [...current.excludedHosts, 'two.cqu.edu.cn'],
+    }));
+    releaseFirst.resolve();
+
+    await Promise.all([addHost, addRule]);
+
+    expect(await loadSettings()).toEqual({
+      ...DEFAULT_SETTINGS,
+      customRules: [customRule],
+      excludedHosts: ['one.cqu.edu.cn', 'two.cqu.edu.cn'],
+    });
+  });
+
+  it('orders a direct save and a queued custom mutation through one writer queue', async () => {
+    const storageWrite = deferred<void>();
+    const originalSet = browser.storage.local.set.bind(browser.storage.local) as StorageSet;
+    mockStorageSet().mockImplementationOnce(async (items) => {
+      await storageWrite.promise;
+      await originalSet(items);
+    }).mockImplementation(originalSet);
+    const saving = saveSettings({
+      ...DEFAULT_SETTINGS,
+      excludedHosts: ['saved.cqu.edu.cn'],
+    });
+    const customRule = createCustomRule();
+    const updating = updateSettings((current) => ({
+      ...current,
+      customRules: [customRule],
+    }));
+    storageWrite.resolve();
+
+    await Promise.all([saving, updating]);
+
+    expect(await loadSettings()).toEqual({
+      ...DEFAULT_SETTINGS,
+      excludedHosts: ['saved.cqu.edu.cn'],
+      customRules: [customRule],
+    });
   });
 
   it('enables without prompting when the exact optional origins are already granted', async () => {

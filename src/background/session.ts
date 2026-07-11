@@ -1,5 +1,5 @@
 import type { Browser } from 'wxt/browser';
-import { loadSettings, saveSettings } from '../storage/settings';
+import { updateSettings } from '../storage/settings';
 
 export interface RewriteRecord {
   tabId: number;
@@ -7,12 +7,27 @@ export interface RewriteRecord {
   originalUrl: string;
   targetUrl: string;
   recordedAt: number;
+  generation: string;
+  navigationTime: number;
   error?: string;
+}
+
+interface BypassRuleIdentity {
+  id: number;
+  priority: number;
+  regexFilter: string;
+  tabId: number;
+  actionType: 'allow';
+  resourceType: 'main_frame';
+  isUrlFilterCaseSensitive: true;
 }
 
 interface OriginalBypass {
   tabId: number;
   originalRequestUrl: string;
+  recordGeneration: string;
+  nonce: string;
+  rule: BypassRuleIdentity;
 }
 
 const BYPASS_RULE_ID_START = 1_000_000_000;
@@ -28,7 +43,13 @@ const escapeRegex = (value: string): string =>
   value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 function assertTabId(tabId: number): void {
-  if (!Number.isInteger(tabId) || tabId < 0) throw new Error(`Invalid tab ID: ${tabId}`);
+  if (
+    !Number.isInteger(tabId) ||
+    tabId < 0 ||
+    tabId > MAX_DNR_RULE_ID - BYPASS_RULE_ID_START
+  ) {
+    throw new Error(`Invalid tab ID: ${tabId}`);
+  }
 }
 
 function bypassRuleId(tabId: number): number {
@@ -78,6 +99,10 @@ function isRewriteRecord(value: unknown, tabId?: number): value is RewriteRecord
     typeof record.targetUrl === 'string' &&
     typeof record.recordedAt === 'number' &&
     Number.isFinite(record.recordedAt) &&
+    typeof record.generation === 'string' &&
+    record.generation.length > 0 &&
+    typeof record.navigationTime === 'number' &&
+    Number.isFinite(record.navigationTime) &&
     (record.error === undefined || typeof record.error === 'string')
   );
 }
@@ -94,7 +119,34 @@ function isOriginalBypassState(value: unknown, tabId: number): value is Original
   return (
     bypass.tabId === tabId &&
     typeof bypass.originalRequestUrl === 'string' &&
-    sameRequestUrl(bypass.originalRequestUrl, bypass.originalRequestUrl)
+    sameRequestUrl(bypass.originalRequestUrl, bypass.originalRequestUrl) &&
+    typeof bypass.recordGeneration === 'string' &&
+    bypass.recordGeneration.length > 0 &&
+    typeof bypass.nonce === 'string' &&
+    bypass.nonce.length > 0 &&
+    isBypassRuleIdentity(bypass.rule, tabId)
+  );
+}
+
+function isBypassRuleIdentity(
+  value: unknown,
+  tabId: number,
+): value is BypassRuleIdentity {
+  if (!value || typeof value !== 'object') return false;
+  const rule = value as Partial<BypassRuleIdentity>;
+  return (
+    Number.isInteger(rule.id) &&
+    (rule.id as number) >= 1 &&
+    (rule.id as number) <= MAX_DNR_RULE_ID &&
+    Number.isInteger(rule.priority) &&
+    (rule.priority as number) > BYPASS_PRIORITY &&
+    (rule.priority as number) <= MAX_DNR_RULE_ID &&
+    typeof rule.regexFilter === 'string' &&
+    rule.regexFilter.length > 0 &&
+    rule.tabId === tabId &&
+    rule.actionType === 'allow' &&
+    rule.resourceType === 'main_frame' &&
+    rule.isUrlFilterCaseSensitive === true
   );
 }
 
@@ -126,19 +178,50 @@ export async function clearRewriteRecord(tabId: number): Promise<void> {
   await browser.storage.session.remove(recordKey(tabId));
 }
 
-function ownsBypassRule(rule: Browser.declarativeNetRequest.Rule, tabId: number): boolean {
+function ownsBypassRule(
+  rule: Browser.declarativeNetRequest.Rule,
+  identity: BypassRuleIdentity,
+): boolean {
   return (
+    hasExactKeys(rule, ['action', 'condition', 'id', 'priority']) &&
+    hasExactKeys(rule.action, ['type']) &&
+    hasExactKeys(rule.condition, [
+      'isUrlFilterCaseSensitive',
+      'regexFilter',
+      'resourceTypes',
+      'tabIds',
+    ]) &&
+    rule.id === identity.id &&
+    rule.priority === identity.priority &&
     rule.action.type === 'allow' &&
+    rule.condition.regexFilter === identity.regexFilter &&
+    rule.condition.isUrlFilterCaseSensitive === identity.isUrlFilterCaseSensitive &&
     rule.condition.tabIds?.length === 1 &&
-    rule.condition.tabIds[0] === tabId &&
+    rule.condition.tabIds[0] === identity.tabId &&
     rule.condition.resourceTypes?.length === 1 &&
-    rule.condition.resourceTypes[0] === 'main_frame'
+    rule.condition.resourceTypes[0] === identity.resourceType
   );
 }
 
-export async function isOriginalBypass(tabId: number, url: string): Promise<boolean> {
+function hasExactKeys(value: object, expected: readonly string[]): boolean {
+  const actual = Object.keys(value).sort();
+  return actual.length === expected.length && actual.every((key, index) => key === expected[index]);
+}
+
+export async function getOriginalBypassNonce(
+  tabId: number,
+  url: string,
+): Promise<string | null> {
   const bypass = await getOriginalBypass(tabId);
-  return bypass !== null && sameRequestUrl(url, bypass.originalRequestUrl);
+  if (!bypass || !sameRequestUrl(url, bypass.originalRequestUrl)) return null;
+  const rules = await browser.declarativeNetRequest.getSessionRules();
+  const latest = await getOriginalBypass(tabId);
+  if (!latest || latest.nonce !== bypass.nonce) return null;
+  return rules.some((rule) => ownsBypassRule(rule, bypass.rule)) ? bypass.nonce : null;
+}
+
+export async function isOriginalBypass(tabId: number, url: string): Promise<boolean> {
+  return (await getOriginalBypassNonce(tabId, url)) !== null;
 }
 
 export async function openOriginalOnce(tabId: number): Promise<void> {
@@ -147,14 +230,39 @@ export async function openOriginalOnce(tabId: number): Promise<void> {
 
   const originalRequestUrl = canonicalRequestUrl(record.originalUrl);
   const id = bypassRuleId(tabId);
-  const existing = (await browser.declarativeNetRequest.getSessionRules()).find(
-    (rule) => rule.id === id,
+  const previousBypass = await getOriginalBypass(tabId);
+  const existing = (await browser.declarativeNetRequest.getSessionRules()).find((rule) =>
+    rule.id === id,
   );
-  if (existing && !ownsBypassRule(existing, tabId)) {
+  if (
+    existing &&
+    (!Number.isInteger(existing.priority) ||
+      !previousBypass ||
+      !ownsBypassRule(existing, previousBypass.rule))
+  ) {
     throw new Error(`Session DNR rule ID collision: ${id}`);
   }
 
-  const bypass: OriginalBypass = { tabId, originalRequestUrl };
+  const priority = existing ? existing.priority! + 1 : BYPASS_PRIORITY + 1;
+  if (!Number.isInteger(priority) || priority > MAX_DNR_RULE_ID) {
+    throw new Error(`Bypass priority is outside the DNR range: ${priority}`);
+  }
+  const regexFilter = `^${escapeRegex(originalRequestUrl)}$`;
+  const bypass: OriginalBypass = {
+    tabId,
+    originalRequestUrl,
+    recordGeneration: record.generation,
+    nonce: crypto.randomUUID(),
+    rule: {
+      id,
+      priority,
+      regexFilter,
+      tabId,
+      actionType: 'allow',
+      resourceType: 'main_frame',
+      isUrlFilterCaseSensitive: true,
+    },
+  };
   await browser.storage.session.set({ [bypassKey(tabId)]: bypass });
   try {
     await browser.declarativeNetRequest.updateSessionRules({
@@ -162,10 +270,10 @@ export async function openOriginalOnce(tabId: number): Promise<void> {
       addRules: [
         {
           id,
-          priority: BYPASS_PRIORITY,
+          priority,
           action: { type: 'allow' },
           condition: {
-            regexFilter: `^${escapeRegex(originalRequestUrl)}$`,
+            regexFilter,
             isUrlFilterCaseSensitive: true,
             resourceTypes: MAIN_FRAME,
             tabIds: [tabId],
@@ -173,12 +281,19 @@ export async function openOriginalOnce(tabId: number): Promise<void> {
         },
       ],
     });
+  } catch (error) {
+    if (previousBypass) {
+      await browser.storage.session.set({ [bypassKey(tabId)]: previousBypass });
+    } else {
+      await browser.storage.session.remove(bypassKey(tabId));
+    }
+    throw error;
+  }
+
+  try {
     await browser.tabs.update(tabId, { url: record.originalUrl });
   } catch (error) {
-    await Promise.allSettled([
-      browser.declarativeNetRequest.updateSessionRules({ removeRuleIds: [id] }),
-      browser.storage.session.remove(bypassKey(tabId)),
-    ]);
+    await clearOwnedBypass(tabId, bypass.nonce, false);
     throw error;
   }
 }
@@ -214,29 +329,56 @@ export async function excludeCurrentHost(tabId: number): Promise<void> {
   if (!source) throw new Error('The tab has no URL');
   const host = hostFromHttpUrl(source);
 
-  const latest = await loadSettings();
-  const excludedHosts = [...latest.excludedHosts, host]
-    .map(normalizeHost)
-    .filter((candidate): candidate is string => candidate !== null);
-  await saveSettings({
-    ...latest,
-    excludedHosts: [...new Set(excludedHosts)].sort(),
+  await updateSettings((latest) => {
+    const excludedHosts = [...latest.excludedHosts, host]
+      .map(normalizeHost)
+      .filter((candidate): candidate is string => candidate !== null);
+    return {
+      ...latest,
+      excludedHosts: [...new Set(excludedHosts)].sort(),
+    };
   });
 }
 
-export async function clearTabSession(tabId: number): Promise<void> {
-  const id = bypassRuleId(tabId);
-  const results = await Promise.allSettled([
-    browser.declarativeNetRequest.updateSessionRules({ removeRuleIds: [id] }),
-    browser.storage.session.remove([recordKey(tabId), bypassKey(tabId)]),
-  ]);
-  const failures = results.filter(
-    (result): result is PromiseRejectedResult => result.status === 'rejected',
-  );
-  if (failures.length > 0) {
-    throw new AggregateError(
-      failures.map((failure) => failure.reason),
-      `Failed to clear session state for tab ${tabId}`,
-    );
+async function clearOwnedBypass(
+  tabId: number,
+  expectedNonce?: string,
+  removeRecord = true,
+): Promise<void> {
+  assertTabId(tabId);
+  const bypass = await getOriginalBypass(tabId);
+  if (!bypass) {
+    if (removeRecord) await clearRewriteRecord(tabId);
+    return;
   }
+  if (expectedNonce && bypass.nonce !== expectedNonce) return;
+
+  const rules = await browser.declarativeNetRequest.getSessionRules();
+  const latestBeforeRemoval = await getOriginalBypass(tabId);
+  if (!latestBeforeRemoval || latestBeforeRemoval.nonce !== bypass.nonce) return;
+  const candidate = rules.find((rule) => rule.id === bypass.rule.id);
+  if (candidate && ownsBypassRule(candidate, bypass.rule)) {
+    await browser.declarativeNetRequest.updateSessionRules({
+      removeRuleIds: [bypass.rule.id],
+    });
+    const rulesAfterRemoval = await browser.declarativeNetRequest.getSessionRules();
+    const ownerAfterRemoval = await getOriginalBypass(tabId);
+    if (!ownerAfterRemoval || ownerAfterRemoval.nonce !== bypass.nonce) return;
+    if (rulesAfterRemoval.some((rule) => ownsBypassRule(rule, bypass.rule))) {
+      throw new Error(`Owned bypass rule ${bypass.rule.id} is still installed`);
+    }
+  }
+
+  const latestAfterRemoval = await getOriginalBypass(tabId);
+  if (!latestAfterRemoval || latestAfterRemoval.nonce !== bypass.nonce) return;
+  const keys = [bypassKey(tabId)];
+  if (removeRecord) keys.push(recordKey(tabId));
+  await browser.storage.session.remove(keys);
+}
+
+export async function clearTabSession(
+  tabId: number,
+  expectedNonce?: string,
+): Promise<void> {
+  await clearOwnedBypass(tabId, expectedNonce, true);
 }

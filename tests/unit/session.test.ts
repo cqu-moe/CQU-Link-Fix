@@ -11,7 +11,12 @@ import {
   recordRewrite,
   type RewriteRecord,
 } from '../../src/background/session';
-import { DEFAULT_SETTINGS, loadSettings, saveSettings } from '../../src/storage/settings';
+import {
+  DEFAULT_SETTINGS,
+  loadSettings,
+  saveSettings,
+  updateSettings,
+} from '../../src/storage/settings';
 
 type RegexSupport = (
   options: Browser.declarativeNetRequest.RegexOptions,
@@ -62,6 +67,24 @@ function mockUpdateSessionRules(): MockInstance<UpdateRules> {
   return vi.spyOn(browser.declarativeNetRequest, 'updateSessionRules') as unknown as MockInstance<UpdateRules>;
 }
 
+function mockSessionRuleStore(initial: Browser.declarativeNetRequest.Rule[] = []) {
+  let rules = structuredClone(initial);
+  const getRules = mockGetSessionRules().mockImplementation(async () => structuredClone(rules));
+  const updateRules = mockUpdateSessionRules().mockImplementation(async (options) => {
+    const removed = new Set(options.removeRuleIds ?? []);
+    rules = rules.filter((rule) => !removed.has(rule.id));
+    rules.push(...structuredClone(options.addRules ?? []));
+  });
+  return {
+    getRules,
+    updateRules,
+    current: () => structuredClone(rules),
+    replace: (next: Browser.declarativeNetRequest.Rule[]) => {
+      rules = structuredClone(next);
+    },
+  };
+}
+
 function mockUpdateTab(): MockInstance<UpdateTab> {
   return vi.spyOn(browser.tabs, 'update') as unknown as MockInstance<UpdateTab>;
 }
@@ -82,6 +105,8 @@ function rewriteRecord(overrides: Partial<RewriteRecord> = {}): RewriteRecord {
     targetUrl:
       'https://sso-cqu-edu-cn-s.atrust.cqu.edu.cn/login?service=https%3A%2F%2Fclient.example%2Fcb#form',
     recordedAt: 123,
+    generation: 'test-generation',
+    navigationTime: 1,
     ...overrides,
   };
 }
@@ -180,8 +205,8 @@ describe('rewrite session state', () => {
       originalUrl: 'HTTPS://SSO.CQU.EDU.CN:443/a/../login?x=1&x=2#form',
     });
     await recordRewrite(record);
-    mockGetSessionRules().mockResolvedValue([]);
-    const updateRules = mockUpdateSessionRules().mockResolvedValue();
+    const sessionRules = mockSessionRuleStore();
+    const updateRules = sessionRules.updateRules;
     const updateTab = mockUpdateTab().mockResolvedValue(undefined);
 
     await openOriginalOnce(7);
@@ -203,6 +228,21 @@ describe('rewrite session state', () => {
     expect(matcher.test('https://sso.cqu.edu.cn/login?x=1&x=2#form')).toBe(false);
     expect(updateTab).toHaveBeenCalledWith(7, { url: record.originalUrl });
     await expect(isOriginalBypass(7, record.originalUrl)).resolves.toBe(true);
+    const stored = (await browser.storage.session.get('bypass:7'))['bypass:7'];
+    expect(stored).toMatchObject({
+      tabId: 7,
+      recordGeneration: record.generation,
+      nonce: expect.any(String),
+      rule: {
+        id: rule.id,
+        priority: rule.priority,
+        regexFilter: rule.condition.regexFilter,
+        tabId: 7,
+        actionType: 'allow',
+        resourceType: 'main_frame',
+        isUrlFilterCaseSensitive: true,
+      },
+    });
   });
 
   it('rejects an unsafe stored original and a session-rule ID collision without navigating', async () => {
@@ -214,7 +254,7 @@ describe('rewrite session state', () => {
     expect(updateTab).not.toHaveBeenCalled();
 
     await recordRewrite(rewriteRecord());
-    mockGetSessionRules().mockResolvedValue([
+    mockSessionRuleStore([
       {
         id: 1_000_000_007,
         priority: 1,
@@ -228,15 +268,82 @@ describe('rewrite session state', () => {
 
   it('clears both the record and explicit bypass even when no navigation listener is active', async () => {
     await recordRewrite(rewriteRecord());
-    await browser.storage.session.set({
-      'bypass:7': { tabId: 7, originalRequestUrl: 'https://sso.cqu.edu.cn/login' },
-    });
-    const updateRules = mockUpdateSessionRules().mockResolvedValue();
+    const sessionRules = mockSessionRuleStore();
+    mockUpdateTab().mockResolvedValue(undefined);
+    await openOriginalOnce(7);
+    const ownedRuleId = sessionRules.current()[0]!.id;
 
     await clearTabSession(7);
 
-    expect(updateRules).toHaveBeenCalledWith({ removeRuleIds: [1_000_000_007] });
+    expect(sessionRules.updateRules).toHaveBeenLastCalledWith({ removeRuleIds: [ownedRuleId] });
     expect(await browser.storage.session.get(null)).toEqual({});
+  });
+
+  it('does not honor stale bypass storage after its correlated DNR rule disappears', async () => {
+    await recordRewrite(rewriteRecord());
+    const sessionRules = mockSessionRuleStore();
+    mockUpdateTab().mockResolvedValue(undefined);
+    await openOriginalOnce(7);
+    sessionRules.replace([]);
+
+    await expect(isOriginalBypass(7, rewriteRecord().originalUrl)).resolves.toBe(false);
+  });
+
+  it('retains owned bypass state and record when DNR removal fails, then clears on retry', async () => {
+    const record = rewriteRecord();
+    await recordRewrite(record);
+    const sessionRules = mockSessionRuleStore();
+    mockUpdateTab().mockResolvedValue(undefined);
+    await openOriginalOnce(7);
+    sessionRules.updateRules.mockRejectedValueOnce(new Error('DNR busy'));
+
+    await expect(clearTabSession(7)).rejects.toThrow('DNR busy');
+    expect(await getTabState(7)).toEqual(record);
+    await expect(isOriginalBypass(7, record.originalUrl)).resolves.toBe(true);
+
+    await clearTabSession(7);
+    expect(await getTabState(7)).toBeNull();
+    expect(sessionRules.current()).toEqual([]);
+  });
+
+  it('retains ownership when DNR reports success without removing the rule, then retries', async () => {
+    const record = rewriteRecord();
+    await recordRewrite(record);
+    const sessionRules = mockSessionRuleStore();
+    mockUpdateTab().mockResolvedValue(undefined);
+    await openOriginalOnce(7);
+    sessionRules.updateRules.mockImplementationOnce(async () => undefined);
+
+    await expect(clearTabSession(7)).rejects.toThrow(/still installed/i);
+    expect(await getTabState(7)).toEqual(record);
+    await expect(isOriginalBypass(7, record.originalUrl)).resolves.toBe(true);
+
+    await clearTabSession(7);
+    expect(await getTabState(7)).toBeNull();
+    expect(sessionRules.current()).toEqual([]);
+  });
+
+  it('never removes a colliding non-owned session rule during cleanup', async () => {
+    await recordRewrite(rewriteRecord());
+    const sessionRules = mockSessionRuleStore();
+    mockUpdateTab().mockResolvedValue(undefined);
+    await openOriginalOnce(7);
+    const owned = sessionRules.current()[0]!;
+    const collision: Browser.declarativeNetRequest.Rule = {
+      ...owned,
+      condition: {
+        ...owned.condition,
+        excludedTabIds: [8],
+      },
+    };
+    sessionRules.replace([collision]);
+    sessionRules.updateRules.mockClear();
+
+    await clearTabSession(7);
+
+    expect(sessionRules.updateRules).not.toHaveBeenCalled();
+    expect(sessionRules.current()).toEqual([collision]);
+    expect(await getTabState(7)).toBeNull();
   });
 });
 
@@ -285,8 +392,7 @@ describe('background rewrite recording and bypass', () => {
   ])('uses explicit per-tab bypass state for a background-driven $label rewrite', async ({ settings, record }) => {
     await saveSettings(settings);
     await recordRewrite(record);
-    mockGetSessionRules().mockResolvedValue([]);
-    mockUpdateSessionRules().mockResolvedValue();
+    mockSessionRuleStore();
     const updateTab = mockUpdateTab().mockResolvedValue(undefined);
     await startBackground();
     await openOriginalOnce(7);
@@ -358,6 +464,26 @@ describe('background rewrite recording and bypass', () => {
     expect(updateTab).not.toHaveBeenCalled();
     expect(await getTabState(7)).toMatchObject({ ruleId: 'previous-record' });
   });
+
+  it('continues a background rewrite when clearing its stale badge fails', async () => {
+    await saveSettings({ ...DEFAULT_SETTINGS, enableAllCquDomains: true });
+    const updateTab = mockUpdateTab().mockResolvedValue(undefined);
+    vi.spyOn(browser.action, 'setBadgeText').mockRejectedValue(new Error('badge unavailable'));
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    await startBackground();
+
+    await fakeBrowser.webNavigation.onBeforeNavigate.trigger(
+      navigationDetails('https://library.cqu.edu.cn/path', { timeStamp: 30 }),
+    );
+
+    await vi.waitFor(() => expect(updateTab).toHaveBeenCalledWith(7, {
+      url: 'https://library-cqu-edu-cn-s.atrust.cqu.edu.cn/path',
+    }));
+    expect(consoleError).toHaveBeenCalledWith(
+      'Failed to clear stale rewrite badge',
+      expect.any(Error),
+    );
+  });
 });
 
 describe('background session lifecycle, errors, and messages', () => {
@@ -371,8 +497,7 @@ describe('background session lifecycle, errors, and messages', () => {
       originalUrl: 'HTTPS://SSO.CQU.EDU.CN:443/a/../login?x=1#form',
     });
     await recordRewrite(record);
-    mockGetSessionRules().mockResolvedValue([]);
-    const updateRules = mockUpdateSessionRules().mockResolvedValue();
+    const sessionRules = mockSessionRuleStore();
     mockUpdateTab().mockResolvedValue(undefined);
     await startBackground();
     await openOriginalOnce(7);
@@ -382,7 +507,7 @@ describe('background session lifecycle, errors, and messages', () => {
     );
 
     await vi.waitFor(() => expect(getTabState(7)).resolves.toBeNull());
-    expect(updateRules).toHaveBeenLastCalledWith({ removeRuleIds: [1_000_000_007] });
+    expect(sessionRules.current()).toEqual([]);
     await expect(isOriginalBypass(7, record.originalUrl)).resolves.toBe(false);
   });
 
@@ -407,10 +532,9 @@ describe('background session lifecycle, errors, and messages', () => {
 
   it('clears record and bypass on tab removal through the single consolidated listener', async () => {
     await recordRewrite(rewriteRecord());
-    await browser.storage.session.set({
-      'bypass:7': { tabId: 7, originalRequestUrl: 'https://sso.cqu.edu.cn/login' },
-    });
-    const updateRules = mockUpdateSessionRules().mockResolvedValue();
+    const sessionRules = mockSessionRuleStore();
+    mockUpdateTab().mockResolvedValue(undefined);
+    await openOriginalOnce(7);
     const addListener = vi.spyOn(browser.tabs.onRemoved, 'addListener');
     await startBackground();
 
@@ -418,7 +542,27 @@ describe('background session lifecycle, errors, and messages', () => {
     await fakeBrowser.tabs.onRemoved.trigger(7, { isWindowClosing: false, windowId: 1 });
 
     await vi.waitFor(() => expect(getTabState(7)).resolves.toBeNull());
-    expect(updateRules).toHaveBeenCalledWith({ removeRuleIds: [1_000_000_007] });
+    expect(sessionRules.current()).toEqual([]);
+  });
+
+  it('leaves a colliding non-owned rule intact when the tab is removed', async () => {
+    await recordRewrite(rewriteRecord());
+    const sessionRules = mockSessionRuleStore();
+    mockUpdateTab().mockResolvedValue(undefined);
+    await openOriginalOnce(7);
+    const collision: Browser.declarativeNetRequest.Rule = {
+      id: sessionRules.current()[0]!.id,
+      priority: 9,
+      action: { type: 'block' },
+      condition: { resourceTypes: ['main_frame'], tabIds: [7] },
+    };
+    sessionRules.replace([collision]);
+    await startBackground();
+
+    await fakeBrowser.tabs.onRemoved.trigger(7, { isWindowClosing: false, windowId: 1 });
+
+    await vi.waitFor(() => expect(getTabState(7)).resolves.toBeNull());
+    expect(sessionRules.current()).toEqual([collision]);
   });
 
   it('records a matching target error and warning badge while ignoring unrelated errors', async () => {
@@ -445,9 +589,131 @@ describe('background session lifecycle, errors, and messages', () => {
     expect(badgeText).toHaveBeenCalledWith({ tabId: 7, text: '!' });
   });
 
-  it('contains lifecycle badge failures instead of producing unhandled listener rejections', async () => {
+  it('serializes an old target error before a newer rewrite so the newer record and clear badge win', async () => {
+    const old = rewriteRecord();
+    await recordRewrite(old);
+    await saveSettings({ ...DEFAULT_SETTINGS, enableAllCquDomains: true });
+    const originalGet = browser.storage.session.get.bind(browser.storage.session) as StorageGet;
+    const pendingOldRead = deferred<Record<string, unknown>>();
+    const sessionGet = vi.spyOn(browser.storage.session, 'get') as unknown as MockInstance<StorageGet>;
+    mockUpdateTab().mockResolvedValue(undefined);
+    await startBackground();
+    sessionGet.mockReturnValueOnce(pendingOldRead.promise).mockImplementation(originalGet);
+
+    await fakeBrowser.webNavigation.onErrorOccurred.trigger(
+      errorDetails(old.targetUrl, { timeStamp: 10 }),
+    );
+    await fakeBrowser.webNavigation.onBeforeNavigate.trigger(
+      navigationDetails('https://library.cqu.edu.cn/new', { timeStamp: 20 }),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    pendingOldRead.resolve({ 'rewrite:7': old });
+
+    await vi.waitFor(() => expect(getTabState(7)).resolves.toMatchObject({
+      ruleId: 'all-cqu-domains',
+      originalUrl: 'https://library.cqu.edu.cn/new',
+    }));
+    expect((await getTabState(7))?.error).toBeUndefined();
+    await vi.waitFor(() => expect(browser.action.getBadgeText({ tabId: 7 })).resolves.toBe(''));
+  });
+
+  it('serializes a newer rewrite before an overlapping old error and clears the stale badge', async () => {
+    const old = rewriteRecord();
+    await recordRewrite(old);
+    await saveSettings({ ...DEFAULT_SETTINGS, enableAllCquDomains: true });
+    const originalSet = browser.storage.session.set.bind(browser.storage.session) as (
+      items: Record<string, unknown>,
+    ) => Promise<void>;
+    const pendingRewrite = deferred<void>();
+    const sessionSet = vi.spyOn(browser.storage.session, 'set');
+    mockUpdateTab().mockResolvedValue(undefined);
+    await startBackground();
+    sessionSet.mockImplementationOnce(async (items) => {
+      await pendingRewrite.promise;
+      await originalSet(items);
+    }).mockImplementation(originalSet);
+
+    await fakeBrowser.webNavigation.onBeforeNavigate.trigger(
+      navigationDetails('https://library.cqu.edu.cn/newer', { timeStamp: 20 }),
+    );
+    await vi.waitFor(() => expect(sessionSet).toHaveBeenCalled());
+    await fakeBrowser.webNavigation.onErrorOccurred.trigger(
+      errorDetails(old.targetUrl, { timeStamp: 10 }),
+    );
+    pendingRewrite.resolve();
+
+    await vi.waitFor(() => expect(getTabState(7)).resolves.toMatchObject({
+      ruleId: 'all-cqu-domains',
+      originalUrl: 'https://library.cqu.edu.cn/newer',
+    }));
+    expect((await getTabState(7))?.error).toBeUndefined();
+    await vi.waitFor(() => expect(browser.action.getBadgeText({ tabId: 7 })).resolves.toBe(''));
+  });
+
+  it('does not re-add an old target error badge after a newer unrelated commit', async () => {
+    const record = rewriteRecord();
+    await recordRewrite(record);
+    await startBackground();
+
+    await fakeBrowser.webNavigation.onCommitted.trigger(
+      committedDetails('https://example.com/newer', { timeStamp: 20 }),
+    );
+    await fakeBrowser.webNavigation.onErrorOccurred.trigger(
+      errorDetails(record.targetUrl, { timeStamp: 10 }),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(await getTabState(7)).toEqual(record);
+    expect(await browser.action.getBadgeText({ tabId: 7 })).toBe('');
+  });
+
+  it('consumes an active original bypass on top-frame navigation error', async () => {
+    const record = rewriteRecord();
+    await recordRewrite(record);
+    const sessionRules = mockSessionRuleStore();
+    mockUpdateTab().mockResolvedValue(undefined);
+    await startBackground();
+    await openOriginalOnce(7);
+
+    await fakeBrowser.webNavigation.onErrorOccurred.trigger(
+      errorDetails(record.originalUrl.replace('#form', ''), { timeStamp: 20 }),
+    );
+
+    await vi.waitFor(() => expect(getTabState(7)).resolves.toBeNull());
+    expect(sessionRules.current()).toEqual([]);
+  });
+
+  it('binds delayed original cleanup to its nonce so it cannot delete a newer bypass', async () => {
+    const first = rewriteRecord({ generation: 'first' });
+    await recordRewrite(first);
+    const sessionRules = mockSessionRuleStore();
+    mockUpdateTab().mockResolvedValue(undefined);
+    await startBackground();
+    await openOriginalOnce(7);
+    const firstRules = sessionRules.current();
+    const delayedRules = deferred<Browser.declarativeNetRequest.Rule[]>();
+    sessionRules.getRules.mockReturnValueOnce(delayedRules.promise);
+
+    await fakeBrowser.webNavigation.onCommitted.trigger(
+      committedDetails(first.originalUrl, { timeStamp: 10 }),
+    );
+    await vi.waitFor(() => expect(sessionRules.getRules).toHaveBeenCalledTimes(2));
+    const second = rewriteRecord({ generation: 'second', recordedAt: 456 });
+    await recordRewrite(second);
+    await openOriginalOnce(7);
+    delayedRules.resolve(firstRules);
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(await getTabState(7)).toEqual(second);
+    await expect(isOriginalBypass(7, second.originalUrl)).resolves.toBe(true);
+    expect(sessionRules.current()).toHaveLength(1);
+  });
+
+  it('contains synchronous lifecycle badge throws instead of rejecting the listener', async () => {
     await recordRewrite(rewriteRecord());
-    vi.spyOn(browser.action, 'setBadgeText').mockRejectedValue(new Error('badge unavailable'));
+    vi.spyOn(browser.action, 'setBadgeText').mockImplementation(() => {
+      throw new Error('badge unavailable');
+    });
     const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     await startBackground();
 
@@ -457,7 +723,7 @@ describe('background session lifecycle, errors, and messages', () => {
     await vi.waitFor(() => expect(consoleError).toHaveBeenCalled());
   });
 
-  it('validates runtime message shapes and contains valid-message failures', async () => {
+  it('returns typed responses for trusted messages and ignores malformed or untrusted senders', async () => {
     const sessionSet = vi.spyOn(browser.storage.session, 'set');
     const tabGet = mockGetTab();
     const tabUpdate = mockUpdateTab();
@@ -471,20 +737,48 @@ describe('background session lifecycle, errors, and messages', () => {
       { type: 'open-original-once', tabId: -1 },
       { type: 'exclude-current-host', tabId: 1.5 },
       { type: 'get-tab-state', tabId: '7' },
+      { type: 'get-tab-state', tabId: Number.MAX_SAFE_INTEGER },
       { type: 'unknown', tabId: 7 },
     ];
+    const trustedPopup = { id: browser.runtime.id };
 
     for (const message of invalid) {
-      await expect(fakeBrowser.runtime.onMessage.trigger(message, {})).resolves.toEqual([undefined]);
+      await expect(fakeBrowser.runtime.onMessage.trigger(message, trustedPopup)).resolves.toEqual([undefined]);
     }
+    await expect(
+      fakeBrowser.runtime.onMessage.trigger({ type: 'get-tab-state', tabId: 7 }, { id: 'other' }),
+    ).resolves.toEqual([undefined]);
+    await expect(
+      fakeBrowser.runtime.onMessage.trigger(
+        { type: 'get-tab-state', tabId: 7 },
+        { id: browser.runtime.id, tab: { ...tab(), id: 8 } } as never,
+      ),
+    ).resolves.toEqual([undefined]);
     expect(sessionSet).not.toHaveBeenCalled();
     expect(tabGet).not.toHaveBeenCalled();
     expect(tabUpdate).not.toHaveBeenCalled();
 
+    await recordRewrite(rewriteRecord());
     await expect(
-      fakeBrowser.runtime.onMessage.trigger({ type: 'open-original-once', tabId: 7 }, {}),
-    ).resolves.toEqual([undefined]);
-    await vi.waitFor(() => expect(consoleError).toHaveBeenCalled());
+      fakeBrowser.runtime.onMessage.trigger(
+        { type: 'get-tab-state', tabId: 7 },
+        trustedPopup,
+      ),
+    ).resolves.toEqual([{ ok: true, state: rewriteRecord() }]);
+    await expect(
+      fakeBrowser.runtime.onMessage.trigger(
+        { type: 'get-tab-state', tabId: 7 },
+        { id: browser.runtime.id, tab: tab() } as never,
+      ),
+    ).resolves.toEqual([{ ok: true, state: rewriteRecord() }]);
+    await browser.storage.session.remove('rewrite:7');
+    await expect(
+      fakeBrowser.runtime.onMessage.trigger(
+        { type: 'open-original-once', tabId: 7 },
+        trustedPopup,
+      ),
+    ).resolves.toEqual([{ ok: false, error: expect.any(String) }]);
+    expect(consoleError).not.toHaveBeenCalled();
   });
 });
 
@@ -523,6 +817,38 @@ describe('exclude current host', () => {
     expect(await loadSettings()).toMatchObject({
       disabledBuiltInRuleIds: ['core-sso'],
       excludedHosts: ['existing.cqu.edu.cn', 'library.cqu.edu.cn'],
+    });
+  });
+
+  it('serializes exclusion with a concurrent mode/custom update without losing either host', async () => {
+    const pendingTab = deferred<Browser.tabs.Tab>();
+    mockGetTab().mockReturnValue(pendingTab.promise);
+    const excluding = excludeCurrentHost(7);
+    await vi.waitFor(() => expect(browser.tabs.get).toHaveBeenCalledWith(7));
+    const customRule = {
+      id: 'concurrent-rule',
+      dnrId: 9001,
+      name: 'Concurrent',
+      description: 'Concurrent update',
+      category: 'custom' as const,
+      defaultEnabled: true,
+      matcher: { kind: 'host' as const, host: 'other.cqu.edu.cn' },
+      transformer: 'atrust-domain' as const,
+    };
+    const updating = updateSettings((current) => ({
+      ...current,
+      enableAllCquDomains: true,
+      customRules: [customRule],
+      excludedHosts: [...current.excludedHosts, 'first.cqu.edu.cn'],
+    }));
+    pendingTab.resolve(tab('https://second.cqu.edu.cn/path'));
+
+    await Promise.all([excluding, updating]);
+
+    expect(await loadSettings()).toMatchObject({
+      enableAllCquDomains: true,
+      customRules: [customRule],
+      excludedHosts: ['first.cqu.edu.cn', 'second.cqu.edu.cn'],
     });
   });
 

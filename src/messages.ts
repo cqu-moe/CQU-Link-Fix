@@ -1,12 +1,27 @@
+import type { RewriteRecord } from './background/session';
+
+export const MAX_MESSAGE_TAB_ID = 1_147_483_647;
+
 export type BackgroundMessage =
   | { type: 'get-tab-state'; tabId: number }
   | { type: 'open-original-once'; tabId: number }
   | { type: 'exclude-current-host'; tabId: number };
 
+export type BackgroundResponse =
+  | { ok: true; state: RewriteRecord | null }
+  | { ok: true }
+  | { ok: false; error: string };
+
 export function isBackgroundMessage(value: unknown): value is BackgroundMessage {
   if (!value || typeof value !== 'object') return false;
   const candidate = value as { type?: unknown; tabId?: unknown };
-  if (!Number.isInteger(candidate.tabId) || (candidate.tabId as number) < 0) return false;
+  if (
+    !Number.isInteger(candidate.tabId) ||
+    (candidate.tabId as number) < 0 ||
+    (candidate.tabId as number) > MAX_MESSAGE_TAB_ID
+  ) {
+    return false;
+  }
   return (
     candidate.type === 'get-tab-state' ||
     candidate.type === 'open-original-once' ||

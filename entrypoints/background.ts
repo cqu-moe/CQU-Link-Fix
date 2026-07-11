@@ -4,6 +4,7 @@ import {
   clearRewriteRecord,
   clearTabSession,
   excludeCurrentHost,
+  getOriginalBypassNonce,
   getTabState,
   isOriginalBypass,
   openOriginalOnce,
@@ -14,15 +15,18 @@ import {
 import {
   isBackgroundMessage,
   type BackgroundMessage,
+  type BackgroundResponse,
 } from '../src/messages';
 import { decideRegisteredRewrite, getEnabledRules } from '../src/rules/registry';
-import { getRulePriority, reconcileDynamicRules } from '../src/rules/dnr';
+import { compareRulePrecedence, reconcileDynamicRules } from '../src/rules/dnr';
 import type { RuleDefinition } from '../src/rules/types';
 import { loadSettings } from '../src/storage/settings';
 
 let reconciliationQueue = Promise.resolve();
 const latestTopFrameNavigation = new Map<number, symbol>();
 const tabFinalizationQueues = new Map<number, Promise<void>>();
+const latestCommittedNavigationTime = new Map<number, number>();
+let recordGeneration = 0;
 
 function scheduleReconciliation(): void {
   reconciliationQueue = reconciliationQueue
@@ -30,19 +34,6 @@ function scheduleReconciliation(): void {
     .catch((error: unknown) => {
       console.error('Failed to reconcile dynamic DNR rules', error);
     });
-}
-
-function compareNavigationPrecedence(
-  left: RuleDefinition,
-  right: RuleDefinition,
-): number {
-  const priorityDifference = getRulePriority(right) - getRulePriority(left);
-  if (priorityDifference !== 0) return priorityDifference;
-
-  const leftHandledByDnr = left.matcher.kind !== 'youth-article';
-  const rightHandledByDnr = right.matcher.kind !== 'youth-article';
-  if (leftHandledByDnr !== rightHandledByDnr) return leftHandledByDnr ? -1 : 1;
-  return left.dnrId - right.dnrId || left.id.localeCompare(right.id);
 }
 
 function isExcludedHost(host: string, excludedHosts: readonly string[]): boolean {
@@ -54,9 +45,11 @@ function isHandledByDnr(rule: RuleDefinition, url: URL): boolean {
 }
 
 function scheduleSafely(label: string, operation: () => Promise<unknown>): void {
-  void operation().catch((error: unknown) => {
-    console.error(label, error);
-  });
+  void Promise.resolve()
+    .then(operation)
+    .catch((error: unknown) => {
+      console.error(label, error);
+    });
 }
 
 function queueTabFinalization(tabId: number, operation: () => Promise<void>): Promise<void> {
@@ -97,10 +90,24 @@ async function finalizeWinningRewrite(
       await restoreRewriteRecord(record.tabId, previous);
       return;
     }
+    try {
+      await browser.action.setBadgeText({ tabId: record.tabId, text: '' });
+    } catch (error) {
+      console.error('Failed to clear stale rewrite badge', error);
+    }
+    if (latestTopFrameNavigation.get(record.tabId) !== navigationToken) {
+      await restoreRewriteRecord(record.tabId, previous);
+      return;
+    }
     if (targetToNavigate) {
       await browser.tabs.update(record.tabId, { url: targetToNavigate });
     }
   });
+}
+
+function nextRecordGeneration(details: { tabId: number; timeStamp: number }): string {
+  recordGeneration += 1;
+  return `${details.tabId}:${details.timeStamp}:${recordGeneration}:${crypto.randomUUID()}`;
 }
 
 async function rewriteTopFrameNavigation(
@@ -129,7 +136,7 @@ async function rewriteTopFrameNavigation(
   const host = url.hostname.toLowerCase();
   if (isExcludedHost(host, settings.excludedHosts)) return;
 
-  const enabledRules = getEnabledRules(settings).sort(compareNavigationPrecedence);
+  const enabledRules = getEnabledRules(settings).sort(compareRulePrecedence);
   const decision = decideRegisteredRewrite(details.url, enabledRules);
   const winningRule = enabledRules.find((rule) => rule.id === decision?.ruleId);
   let targetToNavigate: string | null = null;
@@ -142,6 +149,8 @@ async function rewriteTopFrameNavigation(
       originalUrl: decision.originalUrl,
       targetUrl: decision.targetUrl,
       recordedAt: Date.now(),
+      generation: nextRecordGeneration(details),
+      navigationTime: details.timeStamp,
     };
     if (
       !isHandledByDnr(winningRule, url) &&
@@ -159,6 +168,8 @@ async function rewriteTopFrameNavigation(
         originalUrl: details.url,
         targetUrl: target,
         recordedAt: Date.now(),
+        generation: nextRecordGeneration(details),
+        navigationTime: details.timeStamp,
       };
       targetToNavigate = target;
     }
@@ -185,17 +196,33 @@ function scheduleTopFrameRewrite(
     });
 }
 
-async function dispatchBackgroundMessage(message: BackgroundMessage): Promise<unknown> {
-  if (message.type === 'get-tab-state') return getTabState(message.tabId);
-  if (message.type === 'open-original-once') return openOriginalOnce(message.tabId);
-  return excludeCurrentHost(message.tabId);
+async function dispatchBackgroundMessage(
+  message: BackgroundMessage,
+): Promise<BackgroundResponse> {
+  if (message.type === 'get-tab-state') {
+    return { ok: true, state: await getTabState(message.tabId) };
+  }
+  if (message.type === 'open-original-once') {
+    await queueTabFinalization(message.tabId, () => openOriginalOnce(message.tabId));
+    return { ok: true };
+  }
+  await excludeCurrentHost(message.tabId);
+  return { ok: true };
 }
 
-function handleRuntimeMessage(message: unknown): Promise<unknown> | undefined {
-  if (!isBackgroundMessage(message)) return undefined;
-  return dispatchBackgroundMessage(message).catch((error: unknown) => {
-    console.error('Failed to handle background message', error);
+function handleRuntimeMessage(
+  message: unknown,
+  sender: Browser.runtime.MessageSender,
+): Promise<BackgroundResponse> | undefined {
+  if (
+    !isBackgroundMessage(message) ||
+    sender.id !== browser.runtime.id ||
+    (sender.tab !== undefined && sender.tab.id !== message.tabId)
+  ) {
     return undefined;
+  }
+  return dispatchBackgroundMessage(message).catch(() => {
+    return { ok: false, error: 'Background operation failed' };
   });
 }
 
@@ -203,14 +230,15 @@ function handleCommittedNavigation(
   details: Browser.webNavigation.WebNavigationTransitionCallbackDetails,
 ): void {
   if (details.frameId !== 0 || details.tabId < 0) return;
-  scheduleSafely('Failed to clear navigation badge', () =>
-    browser.action.setBadgeText({ tabId: details.tabId, text: '' }),
+  const previousTime = latestCommittedNavigationTime.get(details.tabId) ?? -Infinity;
+  latestCommittedNavigationTime.set(details.tabId, Math.max(previousTime, details.timeStamp));
+  scheduleSafely('Failed to finalize committed navigation', () =>
+    queueTabFinalization(details.tabId, async () => {
+      const nonce = await getOriginalBypassNonce(details.tabId, details.url);
+      if (nonce) await clearTabSession(details.tabId, nonce);
+      await browser.action.setBadgeText({ tabId: details.tabId, text: '' });
+    }),
   );
-  scheduleSafely('Failed to consume original navigation bypass', async () => {
-    if (await isOriginalBypass(details.tabId, details.url)) {
-      await clearTabSession(details.tabId);
-    }
-  });
 }
 
 function handleNavigationError(
@@ -218,22 +246,46 @@ function handleNavigationError(
 ): void {
   if (details.frameId !== 0 || details.tabId < 0) return;
   scheduleSafely('Failed to record navigation error', async () => {
-    const record = await getTabState(details.tabId);
-    if (!record || !sameRequestUrl(details.url, record.targetUrl)) return;
-    await recordRewrite({ ...record, error: details.error });
-    const badgeResults = await Promise.allSettled([
-      browser.action.setBadgeBackgroundColor({ tabId: details.tabId, color: '#b42318' }),
-      browser.action.setBadgeText({ tabId: details.tabId, text: '!' }),
-    ]);
-    const failures = badgeResults.filter(
-      (result): result is PromiseRejectedResult => result.status === 'rejected',
-    );
-    if (failures.length > 0) {
-      throw new AggregateError(
-        failures.map((failure) => failure.reason),
-        'Failed to update navigation error badge',
-      );
-    }
+    await queueTabFinalization(details.tabId, async () => {
+      if (details.timeStamp < (latestCommittedNavigationTime.get(details.tabId) ?? -Infinity)) {
+        return;
+      }
+      const bypassNonce = await getOriginalBypassNonce(details.tabId, details.url);
+      if (bypassNonce) {
+        await clearTabSession(details.tabId, bypassNonce);
+        await browser.action.setBadgeText({ tabId: details.tabId, text: '' });
+        return;
+      }
+
+      const record = await getTabState(details.tabId);
+      if (
+        !record ||
+        details.timeStamp < record.navigationTime ||
+        !sameRequestUrl(details.url, record.targetUrl)
+      ) {
+        return;
+      }
+      const generation = record.generation;
+      await recordRewrite({ ...record, error: details.error });
+      const latestBeforeBadge = await getTabState(details.tabId);
+      if (
+        latestBeforeBadge?.generation !== generation ||
+        details.timeStamp < (latestCommittedNavigationTime.get(details.tabId) ?? -Infinity)
+      ) {
+        return;
+      }
+      await Promise.all([
+        browser.action.setBadgeBackgroundColor({ tabId: details.tabId, color: '#b42318' }),
+        browser.action.setBadgeText({ tabId: details.tabId, text: '!' }),
+      ]);
+      const latestAfterBadge = await getTabState(details.tabId);
+      if (
+        latestAfterBadge?.generation !== generation ||
+        details.timeStamp < (latestCommittedNavigationTime.get(details.tabId) ?? -Infinity)
+      ) {
+        await browser.action.setBadgeText({ tabId: details.tabId, text: '' });
+      }
+    });
   });
 }
 
@@ -242,6 +294,7 @@ function handleTabRemoved(tabId: number): void {
   scheduleSafely('Failed to clear removed tab session', () =>
     queueTabFinalization(tabId, () => clearTabSession(tabId)),
   );
+  latestCommittedNavigationTime.delete(tabId);
 }
 
 export default defineBackground(() => {

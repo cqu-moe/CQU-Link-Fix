@@ -20,6 +20,7 @@ const SETTINGS_KEY = 'settings';
 const CQU_OPTIONAL_ORIGINS = {
   origins: ['*://cqu.edu.cn/*', '*://*.cqu.edu.cn/*'],
 };
+let settingsWriteQueue = Promise.resolve();
 
 export async function loadSettings(): Promise<ExtensionSettings> {
   const stored = await browser.storage.local.get(SETTINGS_KEY);
@@ -31,13 +32,39 @@ export async function loadSettings(): Promise<ExtensionSettings> {
 }
 
 export async function saveSettings(next: ExtensionSettings): Promise<void> {
-  await browser.storage.local.set({ [SETTINGS_KEY]: next });
+  const snapshot = structuredClone(next);
+  await queueSettingsWrite(async () => {
+    await writeSettings(snapshot);
+  });
+}
+
+async function writeSettings(next: ExtensionSettings): Promise<void> {
+  await browser.storage.local.set({ [SETTINGS_KEY]: structuredClone(next) });
+}
+
+function queueSettingsWrite<T>(operation: () => Promise<T>): Promise<T> {
+  const current = settingsWriteQueue.then(operation, operation);
+  settingsWriteQueue = current.then(
+    () => undefined,
+    () => undefined,
+  );
+  return current;
+}
+
+export async function updateSettings(
+  mutator: (current: ExtensionSettings) => ExtensionSettings | Promise<ExtensionSettings>,
+): Promise<ExtensionSettings> {
+  return queueSettingsWrite(async () => {
+    const current = await loadSettings();
+    const next = structuredClone(await mutator(current));
+    await writeSettings(next);
+    return structuredClone(next);
+  });
 }
 
 async function persistAllCquMode(enabled: boolean): Promise<boolean> {
   try {
-    const latest = await loadSettings();
-    await saveSettings({ ...latest, enableAllCquDomains: enabled });
+    await updateSettings((latest) => ({ ...latest, enableAllCquDomains: enabled }));
     return true;
   } catch {
     return false;

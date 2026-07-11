@@ -4,6 +4,7 @@ import { fakeBrowser } from 'wxt/testing/fake-browser';
 import background from '../../entrypoints/background';
 import { BUILT_IN_RULES } from '../../src/rules/builtins';
 import {
+  compareRulePrecedence,
   compileDynamicRules,
   getRulePriority,
   reconcileDynamicRules,
@@ -169,7 +170,7 @@ describe('DNR compilation', () => {
 
     expect(sso).toMatchObject({
       id: 1001,
-      priority: 10_000,
+      priority: expect.any(Number),
       condition: { resourceTypes: MAIN_FRAME },
       action: {
         type: 'redirect',
@@ -178,14 +179,34 @@ describe('DNR compilation', () => {
     });
     expect(youth).toMatchObject({
       id: 2001,
-      priority: 20_000,
+      priority: expect.any(Number),
       condition: { resourceTypes: MAIN_FRAME },
       action: { type: 'redirect' },
     });
     expect(compiled).toHaveLength(2);
+    expect(youth!.priority!).toBeGreaterThan(sso!.priority!);
     expect(compileDynamicRules(BUILT_IN_RULES, [])).toEqual(
       compileDynamicRules(BUILT_IN_RULES, []),
     );
+  });
+
+  it('encodes the same unique total precedence for overlapping equal-base custom rules', () => {
+    const host = createYouthHostRule();
+    const youth = createCustomYouthArticleRule();
+    const compiled = compileDynamicRules([youth, host], []);
+    const hostDnr = compiled.find((rule) => rule.id === host.dnrId)!;
+    const youthDnr = compiled.find((rule) => rule.id === youth.dnrId)!;
+
+    expect(compareRulePrecedence(host, youth)).toBeLessThan(0);
+    expect(hostDnr.priority!).toBeGreaterThan(youthDnr.priority!);
+    expect(new Set(compiled.map((rule) => rule.priority)).size).toBe(compiled.length);
+    expect(compiled.every((rule) => rule.priority! > 0 && rule.priority! < 100_000)).toBe(true);
+  });
+
+  it('rejects redirect sets that exceed the unique priority capacity', () => {
+    expect(() =>
+      compileDynamicRules(Array.from({ length: 100_000 }, () => BUILT_IN_RULES[0]!), []),
+    ).toThrow(/priority capacity/i);
   });
 
   it('matches the exact SSO host, preserves its suffix, and rejects host lookalikes', () => {
@@ -468,6 +489,30 @@ describe('queried Youth navigation routing', () => {
     expect(updateTab).not.toHaveBeenCalled();
   });
 
+  it('records the same custom-host winner that compiled DNR gives a queryless overlap', async () => {
+    const youth = createCustomYouthArticleRule();
+    const host = createYouthHostRule();
+    await saveSettings({
+      ...DEFAULT_SETTINGS,
+      customRules: [youth, host],
+      disabledBuiltInRuleIds: ['addon-youth-public'],
+    });
+    const compiled = compileDynamicRules([youth, host], []);
+    const compiledWinner = [...compiled].sort((left, right) => right.priority! - left.priority!)[0]!;
+    await startBackgroundWithDnrMocks();
+
+    await fakeBrowser.webNavigation.onBeforeNavigate.trigger(
+      navigationDetails('https://youth.cqu.edu.cn/info/1009/24264.htm'),
+    );
+
+    await vi.waitFor(() =>
+      expect(browser.storage.session.get('rewrite:7')).resolves.toMatchObject({
+        'rewrite:7': { ruleId: host.id },
+      }),
+    );
+    expect(compiledWinner.id).toBe(host.dnrId);
+  });
+
   it('restores queried Youth fallback when the custom host rule is disabled', async () => {
     const customRule = createYouthHostRule();
     await saveSettings({
@@ -496,7 +541,7 @@ describe('queried Youth navigation routing', () => {
     await fakeBrowser.webNavigation.onBeforeNavigate.trigger(
       navigationDetails('https://youth.cqu.edu.cn/info/1009/24264.htm?state=old'),
     );
-    expect(storageGet).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => expect(storageGet).toHaveBeenCalledTimes(1));
     await fakeBrowser.webNavigation.onBeforeNavigate.trigger(
       navigationDetails('https://example.com/newer'),
     );
@@ -516,7 +561,7 @@ describe('queried Youth navigation routing', () => {
     const input = 'https://youth.cqu.edu.cn/info/1009/24264.htm?state=current';
 
     await fakeBrowser.webNavigation.onBeforeNavigate.trigger(navigationDetails(input));
-    expect(storageGet).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => expect(storageGet).toHaveBeenCalledTimes(1));
     pendingSettings.resolve({ settings: DEFAULT_SETTINGS });
 
     await vi.waitFor(() => expect(updateTab).toHaveBeenCalledTimes(1));
@@ -686,7 +731,7 @@ describe('unified top-frame navigation routing', () => {
     await fakeBrowser.webNavigation.onBeforeNavigate.trigger(
       navigationDetails('https://library.cqu.edu.cn/old'),
     );
-    expect(storageGet).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => expect(storageGet).toHaveBeenCalledTimes(1));
     await fakeBrowser.webNavigation.onBeforeNavigate.trigger(
       navigationDetails('https://example.com/newer'),
     );

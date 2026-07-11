@@ -5,6 +5,8 @@ import type { RuleDefinition } from './types';
 
 const ALLOW_ID_START = 80_000;
 const MAX_RULE_ID = 2_147_483_647;
+const MAX_REDIRECT_PRIORITY = 99_999;
+const MIN_REDIRECT_PRIORITY = 1;
 const MAIN_FRAME: NonNullable<Browser.declarativeNetRequest.RuleCondition['resourceTypes']> = [
   'main_frame',
 ];
@@ -79,9 +81,24 @@ export function getRulePriority(rule: RuleDefinition): number {
   return 10_000;
 }
 
-function compileRedirects(rule: RuleDefinition): Browser.declarativeNetRequest.Rule[] {
+export function compareRulePrecedence(
+  left: RuleDefinition,
+  right: RuleDefinition,
+): number {
+  const rankDifference = getRulePriority(right) - getRulePriority(left);
+  if (rankDifference !== 0) return rankDifference;
+
+  const leftHandledByDnr = left.matcher.kind !== 'youth-article';
+  const rightHandledByDnr = right.matcher.kind !== 'youth-article';
+  if (leftHandledByDnr !== rightHandledByDnr) return leftHandledByDnr ? -1 : 1;
+  return left.dnrId - right.dnrId || left.id.localeCompare(right.id);
+}
+
+function compileRedirects(
+  rule: RuleDefinition,
+  priority: number,
+): Browser.declarativeNetRequest.Rule[] {
   const matcher = rule.matcher;
-  const priority = getRulePriority(rule);
 
   if (matcher.kind === 'host') {
     const host = normalizeHost(matcher.host);
@@ -153,9 +170,17 @@ export function compileDynamicRules(
   rules: readonly RuleDefinition[],
   excludedHosts: readonly string[],
 ): Browser.declarativeNetRequest.Rule[] {
+  const priorityCapacity = MAX_REDIRECT_PRIORITY - MIN_REDIRECT_PRIORITY + 1;
+  if (rules.length > priorityCapacity) {
+    throw new Error(`Redirect rule count exceeds unique priority capacity: ${rules.length}`);
+  }
+  const ordered = [...rules].sort(compareRulePrecedence);
+  const priorities = new Map(
+    ordered.map((rule, index) => [rule, MAX_REDIRECT_PRIORITY - index]),
+  );
   const compiled = [
     ...compileAllows(excludedHosts),
-    ...rules.flatMap((rule) => compileRedirects(rule)),
+    ...rules.flatMap((rule) => compileRedirects(rule, priorities.get(rule)!)),
   ];
   assertUniqueRuleIds(compiled);
   return compiled;
