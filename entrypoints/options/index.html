@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>CQU Link Fix · 规则管理</title>
+    <meta name="color-scheme" content="light" />
+  </head>
+  <body>
+    <header class="masthead">
+      <div class="masthead__mark" aria-hidden="true">CQU</div>
+      <div>
+        <p class="eyebrow">LOCAL NAVIGATION UTILITY / 本地导航工具</p>
+        <h1>CQU Link Fix</h1>
+        <p class="lede">管理请求前改写、站点例外与最小主机权限。</p>
+      </div>
+    </header>
+
+    <main>
+      <section class="control-deck" aria-labelledby="global-heading">
+        <div class="section-heading">
+          <p class="section-index">01 / GLOBAL</p>
+          <h2 id="global-heading">全局控制</h2>
+        </div>
+        <fieldset class="switch-panel">
+          <legend>扩展状态</legend>
+          <div class="switch-row">
+            <div>
+              <label for="master-enabled">启用链接改写</label>
+              <p>停用后保留全部本地规则，但不执行新的改写。</p>
+            </div>
+            <input id="master-enabled" type="checkbox" role="switch" />
+          </div>
+        </fieldset>
+        <fieldset class="switch-panel switch-panel--accent">
+          <legend>可选权限</legend>
+          <div class="switch-row">
+            <div>
+              <label for="all-cqu-enabled">全部 CQU 域名模式</label>
+              <p>开启时才申请 <code>cqu.edu.cn</code> 与 <code>*.cqu.edu.cn</code> 的可选访问权限。未被学校 aTrust 发布的站点仍可能无法访问。</p>
+            </div>
+            <input id="all-cqu-enabled" type="checkbox" role="switch" />
+          </div>
+        </fieldset>
+      </section>
+
+      <section aria-labelledby="built-in-heading">
+        <div class="section-heading">
+          <p class="section-index">02 / BUILT-IN</p>
+          <h2 id="built-in-heading">内置规则</h2>
+          <p>规则随扩展发布。关闭内置规则只保存本地覆盖状态。</p>
+        </div>
+        <div id="built-in-groups" class="rule-groups"></div>
+      </section>
+
+      <section aria-labelledby="custom-heading">
+        <div class="section-heading">
+          <p class="section-index">03 / LOCAL</p>
+          <h2 id="custom-heading">本地精确规则</h2>
+          <p>首版只接受不带协议、路径、端口或通配符的 CQU DNS 域名。保存前只申请源站与生成目标的精确权限。</p>
+        </div>
+        <form id="custom-rule-form" class="custom-form" novalidate>
+          <label for="custom-host">CQU 域名</label>
+          <div class="custom-form__row">
+            <input
+              id="custom-host"
+              name="host"
+              type="text"
+              inputmode="url"
+              autocomplete="off"
+              spellcheck="false"
+              placeholder="library.cqu.edu.cn"
+              aria-describedby="custom-help custom-error"
+            />
+            <button id="custom-submit" type="submit">申请权限并添加</button>
+          </div>
+          <p id="custom-help" class="form-help">IP、IPv6、userinfo、aTrust 地址和已有规则会被拒绝。</p>
+          <p id="custom-error" class="form-error" role="alert"></p>
+        </form>
+        <div id="custom-list" class="rule-list" aria-label="本地自定义规则"></div>
+      </section>
+
+      <section aria-labelledby="excluded-heading">
+        <div class="section-heading">
+          <p class="section-index">04 / EXCLUSIONS</p>
+          <h2 id="excluded-heading">暂停的站点</h2>
+          <p>这些主机会跳过全部改写。可在弹窗中暂停当前站点。</p>
+        </div>
+        <div id="excluded-list" class="excluded-list"></div>
+      </section>
+
+      <section class="status-strip" aria-labelledby="status-heading">
+        <h2 id="status-heading">设置状态</h2>
+        <p id="status" role="status" aria-live="polite">正在读取设置…</p>
+      </section>
+    </main>
+
+    <footer>
+      <span>CQU LINK FIX / LOCAL ONLY</span>
+      <span>无遥测 · 无远程规则</span>
+    </footer>
+    <script type="module" src="./main.ts"></script>
+  </body>
+</html>

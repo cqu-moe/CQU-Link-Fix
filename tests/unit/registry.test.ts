@@ -5,6 +5,21 @@ import { DEFAULT_SETTINGS } from '../../src/storage/settings';
 import type { CustomRule } from '../../src/rules/types';
 
 describe('rule registry', () => {
+  it('omits locally disabled custom rules', () => {
+    const custom = {
+      id: 'custom-disabled',
+      dnrId: 10_001,
+      name: 'Disabled custom',
+      description: 'Disabled in options',
+      category: 'custom' as const,
+      defaultEnabled: false,
+      matcher: { kind: 'host' as const, host: 'disabled.cqu.edu.cn' },
+      transformer: 'atrust-domain' as const,
+    };
+
+    expect(getEnabledRules({ ...DEFAULT_SETTINGS, customRules: [custom] }))
+      .not.toContainEqual(custom);
+  });
   it('ships stable default built-ins', () => {
     expect(BUILT_IN_RULES.map(({ id, dnrId }) => [id, dnrId])).toEqual([
       ['core-sso', 1001],

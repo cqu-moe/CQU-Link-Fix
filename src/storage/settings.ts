@@ -1,5 +1,4 @@
 import type { CustomRule } from '../rules/types';
-import type { BackgroundResponse } from '../messages';
 import { BUILT_IN_RULES } from '../rules/builtins';
 
 export interface ExtensionSettings {
@@ -73,8 +72,13 @@ export async function replaceSettingsViaBackground(
 
 export async function getSettingsSnapshotViaBackground(): Promise<SettingsSnapshot | null> {
   try {
-    const response = await browser.runtime.sendMessage({ type: 'get-settings-snapshot' }) as BackgroundResponse | undefined;
-    return response?.ok === true && 'snapshot' in response ? structuredClone(response.snapshot) : null;
+    const response = await browser.runtime.sendMessage({ type: 'get-settings-snapshot' }) as unknown;
+    if (
+      !isPlainObject(response) ||
+      response.ok !== true ||
+      !hasExactKeys(response, ['ok', 'snapshot'])
+    ) return null;
+    return validateSettingsSnapshot(response.snapshot);
   } catch { return null; }
 }
 
@@ -84,16 +88,27 @@ async function persistAllCquModeViaBackground(enabled: boolean): Promise<boolean
 
 async function sendSettingsMutationMessage(message: unknown): Promise<ReplaceSettingsResult> {
   try {
-    const response = (await browser.runtime.sendMessage(message)) as
-      | BackgroundResponse
-      | undefined;
-    if (response?.ok === true) {
-      return { ok: true, revision: 'revision' in response ? response.revision : 0 };
+    const response = (await browser.runtime.sendMessage(message)) as unknown;
+    if (
+      isPlainObject(response) &&
+      response.ok === true &&
+      hasExactKeys(response, ['ok', 'revision']) &&
+      isSafeRevision(response.revision)
+    ) {
+      return { ok: true, revision: response.revision };
     }
-    if (response?.ok === false) return {
+    if (
+      isPlainObject(response) &&
+      response.ok === false &&
+      typeof response.error === 'string' &&
+      response.error.trim() &&
+      (response.code === undefined ||
+        response.code === 'settings-conflict' ||
+        response.code === 'operation-failed')
+    ) return {
       ok: false,
       code: response.code === 'settings-conflict' ? 'settings-conflict' : 'operation-failed',
-      error: response.error,
+      error: response.error.trim(),
     };
     return { ok: false, code: 'operation-failed', error: 'Background operation failed' };
   } catch {
@@ -223,6 +238,20 @@ export function validateExtensionSettings(value: unknown): ExtensionSettings {
   return { ...editable, enableAllCquDomains: value.enableAllCquDomains };
 }
 
+export function validateSettingsSnapshot(value: unknown): SettingsSnapshot {
+  if (
+    !isPlainObject(value) ||
+    !hasExactKeys(value, ['revision', 'settings']) ||
+    !isSafeRevision(value.revision)
+  ) {
+    throw new Error('Settings snapshot has an invalid shape');
+  }
+  return {
+    settings: validateExtensionSettings(value.settings),
+    revision: value.revision,
+  };
+}
+
 export function validateEditableSettings(value: unknown): EditableSettings {
   if (!isPlainObject(value) || !hasExactKeys(value, [
     'customRules', 'disabledBuiltInRuleIds', 'enabled', 'excludedHosts',
@@ -300,16 +329,13 @@ function parseCustomRule(value: unknown): CustomRule {
     if (!hasExactKeys(value.matcher, ['host', 'kind'])) {
       throw new Error('Custom host matcher has an invalid shape');
     }
-    const host = normalizeDnsHost(value.matcher.host);
-    if (
-      !host ||
-      !(host === 'cqu.edu.cn' || host.endsWith('.cqu.edu.cn')) ||
-      host === 'atrust.cqu.edu.cn' ||
-      host.endsWith('.atrust.cqu.edu.cn') ||
-      value.transformer !== 'atrust-domain'
-    ) {
+    let host: string;
+    try {
+      host = normalizeCustomCquHost(value.matcher.host);
+    } catch {
       throw new Error('Custom host rule is invalid');
     }
+    if (value.transformer !== 'atrust-domain') throw new Error('Custom host rule is invalid');
     matcher = { kind: 'host', host };
   } else {
     throw new Error('Custom matcher kind is invalid');
@@ -334,6 +360,17 @@ function parseStringArray(value: unknown, label: string): string[] {
   return structuredClone(value);
 }
 
+export function normalizeCustomCquHost(value: unknown): string {
+  const host = normalizeDnsHost(value);
+  if (!host || !(host === 'cqu.edu.cn' || host.endsWith('.cqu.edu.cn'))) {
+    throw new Error('首版仅支持 CQU 域名');
+  }
+  if (host === 'atrust.cqu.edu.cn' || host.endsWith('.atrust.cqu.edu.cn')) {
+    throw new Error('不能把 aTrust 地址作为源地址');
+  }
+  return host;
+}
+
 function normalizeDnsHost(value: unknown): string | null {
   if (typeof value !== 'string') return null;
   const normalized = value.trim().toLowerCase();
@@ -350,6 +387,10 @@ function normalizeDnsHost(value: unknown): string | null {
     return null;
   }
   return normalized;
+}
+
+function isSafeRevision(value: unknown): value is number {
+  return Number.isSafeInteger(value) && (value as number) >= 0;
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {

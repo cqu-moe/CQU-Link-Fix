@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest'
 import { fakeBrowser } from 'wxt/testing/fake-browser';
 import {
   DEFAULT_SETTINGS,
+  getSettingsSnapshotViaBackground,
   loadSettingsSnapshot,
   loadSettings,
   replaceSettingsViaBackground,
@@ -79,7 +80,7 @@ describe('settings storage', () => {
           ...current,
           enableAllCquDomains: candidate.enabled!,
         }));
-        return { ok: true };
+        return { ok: true, revision: 1 };
       }
       return { ok: false, error: 'Unexpected test message' };
     });
@@ -141,6 +142,47 @@ describe('settings storage', () => {
     expect(sendMessage).toHaveBeenCalledWith({
       type: 'replace-settings', settings: next, expectedRevision: 3,
     });
+  });
+
+  it.each([
+    { ok: true },
+    { ok: true, revision: -1 },
+    { ok: true, revision: 1.5 },
+    { ok: true, revision: Number.MAX_SAFE_INTEGER + 1 },
+  ])('rejects malformed successful replacement response %#', async (response) => {
+    const { enableAllCquDomains: _, ...next } = DEFAULT_SETTINGS;
+    mockSendMessage().mockResolvedValue(response);
+
+    await expect(replaceSettingsViaBackground(next, 0)).resolves.toEqual({
+      ok: false,
+      code: 'operation-failed',
+      error: 'Background operation failed',
+    });
+  });
+
+  it.each([
+    undefined,
+    { ok: true },
+    { ok: true, snapshot: { settings: DEFAULT_SETTINGS, revision: -1 } },
+    { ok: true, snapshot: { settings: { ...DEFAULT_SETTINGS, enabled: 'yes' }, revision: 1 } },
+  ])('returns null for malformed background snapshot %#', async (response) => {
+    mockSendMessage().mockResolvedValue(response);
+
+    await expect(getSettingsSnapshotViaBackground()).resolves.toBeNull();
+  });
+
+  it('returns a cloned validated background snapshot', async () => {
+    const remote = { settings: { ...DEFAULT_SETTINGS, excludedHosts: ['A.CQU.EDU.CN'] }, revision: 7 };
+    mockSendMessage().mockResolvedValue({ ok: true, snapshot: remote });
+
+    const result = await getSettingsSnapshotViaBackground();
+
+    expect(result).toEqual({
+      settings: { ...DEFAULT_SETTINGS, excludedHosts: ['a.cqu.edu.cn'] },
+      revision: 7,
+    });
+    result!.settings.excludedHosts.push('mutated.cqu.edu.cn');
+    expect(remote.settings.excludedHosts).toEqual(['A.CQU.EDU.CN']);
   });
 
   it('increments a persisted revision for every queued settings write', async () => {
@@ -302,7 +344,7 @@ describe('settings storage', () => {
 
   it('does not write local storage in the permission-caller context', async () => {
     mockPermissionContains().mockResolvedValue(true);
-    mockSendMessage().mockResolvedValue({ ok: true });
+    mockSendMessage().mockResolvedValue({ ok: true, revision: 1 });
     const storageSet = vi.spyOn(browser.storage.local, 'set');
 
     await expect(setAllCquMode(true)).resolves.toBe(true);

@@ -10,7 +10,7 @@ export function getEnabledRules(settings: ExtensionSettings): RuleDefinition[] {
   const disabled = new Set(settings.disabledBuiltInRuleIds);
   const enabledRules = [
     ...BUILT_IN_RULES.filter((rule) => rule.defaultEnabled && !disabled.has(rule.id)),
-    ...settings.customRules.filter((rule) => !disabled.has(rule.id)),
+    ...settings.customRules.filter((rule) => rule.defaultEnabled && !disabled.has(rule.id)),
   ];
   return structuredClone(enabledRules);
 }
