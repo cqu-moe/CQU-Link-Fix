@@ -16,6 +16,20 @@ const CQU_OPTIONAL_ORIGINS = {
 type PermissionOperation = (
   permissions: Browser.permissions.Permissions,
 ) => Promise<boolean>;
+type StorageSet = (items: Record<string, unknown>) => Promise<void>;
+
+interface Deferred<T> {
+  promise: Promise<T>;
+  resolve: (value: T) => void;
+}
+
+function deferred<T>(): Deferred<T> {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((nextResolve) => {
+    resolve = nextResolve;
+  });
+  return { promise, resolve };
+}
 
 function mockPermissionContains(): MockInstance<PermissionOperation> {
   return vi.spyOn(browser.permissions, 'contains') as unknown as MockInstance<PermissionOperation>;
@@ -27,6 +41,23 @@ function mockPermissionRequest(): MockInstance<PermissionOperation> {
 
 function mockPermissionRemove(): MockInstance<PermissionOperation> {
   return vi.spyOn(browser.permissions, 'remove') as unknown as MockInstance<PermissionOperation>;
+}
+
+function mockStorageSet(): MockInstance<StorageSet> {
+  return vi.spyOn(browser.storage.local, 'set') as unknown as MockInstance<StorageSet>;
+}
+
+function createCustomRule(): CustomRule {
+  return {
+    id: 'concurrent-custom',
+    dnrId: 3001,
+    name: 'Concurrent custom rule',
+    description: 'Test-only concurrent settings mutation',
+    category: 'custom',
+    defaultEnabled: true,
+    matcher: { kind: 'host', host: 'library.cqu.edu.cn' },
+    transformer: 'atrust-domain',
+  };
 }
 
 describe('settings storage', () => {
@@ -112,6 +143,80 @@ describe('settings storage', () => {
     expect(storageSet).toHaveBeenCalled();
   });
 
+  it.each([
+    {
+      label: 'permission containment check rejects',
+      arrange: () => mockPermissionContains().mockRejectedValue(new Error('contains failed')),
+    },
+    {
+      label: 'permission request rejects',
+      arrange: () => {
+        mockPermissionContains().mockResolvedValue(false);
+        mockPermissionRequest().mockRejectedValue(new Error('request failed'));
+      },
+    },
+  ])('keeps mode disabled without rejecting when $label', async ({ arrange }) => {
+    await saveSettings({ ...DEFAULT_SETTINGS, enableAllCquDomains: true });
+    arrange();
+
+    await expect(setAllCquMode(true)).resolves.toBe(false);
+
+    expect((await loadSettings()).enableAllCquDomains).toBe(false);
+  });
+
+  it('reloads settings after a delayed permission request before enabling', async () => {
+    const permissionRequest = deferred<boolean>();
+    mockPermissionContains().mockResolvedValue(false);
+    mockPermissionRequest().mockReturnValue(permissionRequest.promise);
+    const enabling = setAllCquMode(true);
+    await vi.waitFor(() => expect(browser.permissions.request).toHaveBeenCalled());
+
+    const concurrentRule = createCustomRule();
+    await saveSettings({
+      ...DEFAULT_SETTINGS,
+      excludedHosts: ['excluded.cqu.edu.cn'],
+      customRules: [concurrentRule],
+    });
+    permissionRequest.resolve(true);
+
+    await expect(enabling).resolves.toBe(true);
+    expect(await loadSettings()).toEqual({
+      ...DEFAULT_SETTINGS,
+      enableAllCquDomains: true,
+      excludedHosts: ['excluded.cqu.edu.cn'],
+      customRules: [concurrentRule],
+    });
+  });
+
+  it('rolls back only a newly acquired grant when enabling storage fails', async () => {
+    mockPermissionContains().mockResolvedValue(false);
+    mockPermissionRequest().mockResolvedValue(true);
+    const remove = mockPermissionRemove().mockRejectedValue(new Error('rollback unavailable'));
+    const originalSet = browser.storage.local.set.bind(browser.storage.local) as StorageSet;
+    mockStorageSet()
+      .mockRejectedValueOnce(new Error('storage unavailable'))
+      .mockImplementation(originalSet);
+
+    await expect(setAllCquMode(true)).resolves.toBe(false);
+
+    expect(remove).toHaveBeenCalledWith(CQU_OPTIONAL_ORIGINS);
+    expect((await loadSettings()).enableAllCquDomains).toBe(false);
+  });
+
+  it('does not remove an existing grant when enabling storage fails', async () => {
+    mockPermissionContains().mockResolvedValue(true);
+    const remove = mockPermissionRemove();
+    const originalSet = browser.storage.local.set.bind(browser.storage.local) as StorageSet;
+    mockStorageSet()
+      .mockRejectedValueOnce(new Error('storage unavailable'))
+      .mockImplementation(originalSet);
+
+    await expect(setAllCquMode(true)).resolves.toBe(false);
+
+    expect(remove).not.toHaveBeenCalled();
+    expect((await loadSettings()).enableAllCquDomains).toBe(false);
+  });
+
   it('disables through settings and removes exactly the optional origins', async () => {
     await saveSettings({ ...DEFAULT_SETTINGS, enableAllCquDomains: true });
     const remove = mockPermissionRemove().mockResolvedValue(true);
@@ -136,4 +241,29 @@ describe('settings storage', () => {
       expect((await loadSettings()).enableAllCquDomains).toBe(false);
     },
   );
+
+  it('reloads concurrent settings after a failed permission removal before disabling', async () => {
+    await saveSettings({ ...DEFAULT_SETTINGS, enableAllCquDomains: true });
+    const permissionRemoval = deferred<boolean>();
+    mockPermissionRemove().mockReturnValue(permissionRemoval.promise);
+    const disabling = setAllCquMode(false);
+    await vi.waitFor(() => expect(browser.permissions.remove).toHaveBeenCalled());
+
+    const concurrentRule = createCustomRule();
+    await saveSettings({
+      ...DEFAULT_SETTINGS,
+      enableAllCquDomains: true,
+      excludedHosts: ['concurrent.cqu.edu.cn'],
+      customRules: [concurrentRule],
+    });
+    permissionRemoval.resolve(false);
+
+    await expect(disabling).resolves.toBe(false);
+    expect(await loadSettings()).toEqual({
+      ...DEFAULT_SETTINGS,
+      enableAllCquDomains: false,
+      excludedHosts: ['concurrent.cqu.edu.cn'],
+      customRules: [concurrentRule],
+    });
+  });
 });

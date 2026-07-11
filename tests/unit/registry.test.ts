@@ -76,6 +76,18 @@ describe('registered rewrites', () => {
     ).toBeNull();
   });
 
+  it.each([
+    'not a URL',
+    'ftp://sso.cqu.edu.cn/login',
+    'https://user@sso.cqu.edu.cn/login',
+    'https://user:secret@sso.cqu.edu.cn/login',
+    'https://sso.cqu.edu.cn:8443/login',
+    'https://youth.cqu.edu.cn:8443/info/1009/24264.htm?state=x',
+  ])('safely ignores unsupported registered URL %s', (input) => {
+    expect(() => decideRegisteredRewrite(input, BUILT_IN_RULES)).not.toThrow();
+    expect(decideRegisteredRewrite(input, BUILT_IN_RULES)).toBeNull();
+  });
+
   it('preserves all decoded CAS service values through a registered rewrite', () => {
     const input =
       'https://sso.cqu.edu.cn/login?service=https%3A%2F%2Ffirst.cqu.edu.cn%2Fcb&service=https%3A%2F%2Fsecond.cqu.edu.cn%2Fcb%3Fstate%3Da%2520b#login';
@@ -117,6 +129,13 @@ describe('registered rewrites', () => {
     const rule = createIpRule(80);
     expect(decideRegisteredRewrite('http://1.1.1.1:80/path', [rule])?.targetUrl).toBe(
       'https://1-1-1-1-80-p.atrust.cqu.edu.cn/path',
+    );
+  });
+
+  it('preserves exact host-port matching for a retained non-default port', () => {
+    const rule = createIpRule(8443);
+    expect(decideRegisteredRewrite('https://1.1.1.1:8443/path', [rule])?.targetUrl).toBe(
+      'https://1-1-1-1-8443-p.atrust.cqu.edu.cn/path',
     );
   });
 });

@@ -699,4 +699,22 @@ describe('unified top-frame navigation routing', () => {
 
     expect(updateTab).not.toHaveBeenCalled();
   });
+
+  it.each([
+    'https://sso.cqu.edu.cn:8443/login?service=https%3A%2F%2Fclient.example%2Fcb',
+    'https://youth.cqu.edu.cn:8443/info/1009/24264.htm?state=x',
+  ])('quietly ignores a registered hostname with a retained non-default port: %s', async (url) => {
+    await saveSettings({ ...DEFAULT_SETTINGS, enableAllCquDomains: true });
+    const updateTab = mockUpdateTab().mockResolvedValue(undefined);
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    await startBackgroundWithDnrMocks();
+
+    await expect(
+      fakeBrowser.webNavigation.onBeforeNavigate.trigger(navigationDetails(url)),
+    ).resolves.toEqual([undefined]);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(updateTab).not.toHaveBeenCalled();
+    expect(consoleError).not.toHaveBeenCalled();
+  });
 });

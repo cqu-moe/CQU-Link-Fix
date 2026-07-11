@@ -34,24 +34,59 @@ export async function saveSettings(next: ExtensionSettings): Promise<void> {
   await browser.storage.local.set({ [SETTINGS_KEY]: next });
 }
 
-export async function setAllCquMode(enabled: boolean): Promise<boolean> {
-  const settings = await loadSettings();
-
-  if (enabled) {
-    const alreadyGranted = await browser.permissions.contains(CQU_OPTIONAL_ORIGINS);
-    const granted = alreadyGranted || await browser.permissions.request(CQU_OPTIONAL_ORIGINS);
-    if (!granted) {
-      await saveSettings({ ...settings, enableAllCquDomains: false });
-      return false;
-    }
-    await saveSettings({ ...settings, enableAllCquDomains: true });
-    return true;
-  }
-
-  await saveSettings({ ...settings, enableAllCquDomains: false });
+async function persistAllCquMode(enabled: boolean): Promise<boolean> {
   try {
-    return await browser.permissions.remove(CQU_OPTIONAL_ORIGINS);
+    const latest = await loadSettings();
+    await saveSettings({ ...latest, enableAllCquDomains: enabled });
+    return true;
   } catch {
     return false;
   }
+}
+
+export async function setAllCquMode(enabled: boolean): Promise<boolean> {
+  if (enabled) {
+    let alreadyGranted: boolean;
+    try {
+      alreadyGranted = await browser.permissions.contains(CQU_OPTIONAL_ORIGINS);
+    } catch {
+      await persistAllCquMode(false);
+      return false;
+    }
+
+    let newlyAcquired = false;
+    if (!alreadyGranted) {
+      try {
+        newlyAcquired = await browser.permissions.request(CQU_OPTIONAL_ORIGINS);
+      } catch {
+        await persistAllCquMode(false);
+        return false;
+      }
+      if (!newlyAcquired) {
+        await persistAllCquMode(false);
+        return false;
+      }
+    }
+
+    if (await persistAllCquMode(true)) return true;
+
+    if (newlyAcquired) {
+      try {
+        await browser.permissions.remove(CQU_OPTIONAL_ORIGINS);
+      } catch {
+        // Best-effort rollback; the false result below reports incomplete enablement.
+      }
+    }
+    await persistAllCquMode(false);
+    return false;
+  }
+
+  let removed = false;
+  try {
+    removed = await browser.permissions.remove(CQU_OPTIONAL_ORIGINS);
+  } catch {
+    // Persist the disabled mode even when Chromium cannot remove the grant.
+  }
+  const persisted = await persistAllCquMode(false);
+  return removed && persisted;
 }

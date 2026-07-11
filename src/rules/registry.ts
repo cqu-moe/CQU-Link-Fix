@@ -19,7 +19,19 @@ export function decideRegisteredRewrite(
   input: string,
   rules: readonly RuleDefinition[],
 ): RewriteDecision | null {
-  const url = new URL(input);
+  let url: URL;
+  try {
+    url = new URL(input);
+  } catch {
+    return null;
+  }
+  if (
+    (url.protocol !== 'http:' && url.protocol !== 'https:') ||
+    url.username ||
+    url.password
+  ) {
+    return null;
+  }
   const rule = rules.find((candidate) => matchesRule(input, url, candidate));
   if (!rule) return null;
 
@@ -36,10 +48,10 @@ function matchesRule(input: string, url: URL, rule: RuleDefinition): boolean {
   const expectedHost = matcher.host.toLowerCase();
   if (hostname !== expectedHost) return false;
 
-  if (matcher.kind === 'host') return true;
+  if (matcher.kind === 'host') return !url.port;
   if (matcher.kind === 'host-port') {
     const explicitPort = EXPLICIT_PORT.exec(input)?.[1];
     return explicitPort !== undefined && Number(explicitPort) === matcher.port;
   }
-  return /^\/info\/\d+\/\d+\.htm$/.test(url.pathname);
+  return !url.port && /^\/info\/\d+\/\d+\.htm$/.test(url.pathname);
 }
