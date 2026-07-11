@@ -1,9 +1,9 @@
+import type { BackgroundMessage, BackgroundResponse } from '../messages';
 import {
-  MAX_MESSAGE_TAB_ID,
-  type BackgroundMessage,
-  type BackgroundResponse,
-} from '../messages';
-import { isRewriteRecord, type RewriteRecord } from '../rewrite-record';
+  MAX_REWRITE_TAB_ID,
+  isRewriteRecord,
+  type RewriteRecord,
+} from '../rewrite-record';
 import { buildPopupModel, type PopupModel } from './popup-model';
 
 interface PopupTab {
@@ -83,7 +83,7 @@ function responseError(value: unknown, fallback: string): string {
 }
 
 function isSafeTabId(value: unknown): value is number {
-  return Number.isInteger(value) && (value as number) >= 0 && (value as number) <= MAX_MESSAGE_TAB_ID;
+  return Number.isInteger(value) && (value as number) >= 0 && (value as number) <= MAX_REWRITE_TAB_ID;
 }
 
 function initialModel(): PopupModel {
