@@ -118,7 +118,7 @@ function compileRedirects(rule: RuleDefinition): Browser.declarativeNetRequest.R
     redirectRule(
       rule.dnrId,
       priority,
-      `^${authority}/info/(\\d+)/(\\d+)\\.htm$`,
+      `^${authority}/info/(\\d+)/(\\d+)\\.htm(?:\\?)?$`,
       `${target}?urltype=news.NewsContentUrl&wbtreeid=\\1&wbnewsid=\\2`,
     ),
   ];

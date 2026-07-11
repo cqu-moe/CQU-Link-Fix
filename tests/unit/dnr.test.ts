@@ -263,10 +263,16 @@ describe('DNR compilation', () => {
     const source = canonicalRequestUrl(
       'https://youth.cqu.edu.cn/info/1009/24264.htm#print',
     );
+    const target =
+      'https://youth.cqu.edu.cn/content.jsp?urltype=news.NewsContentUrl&wbtreeid=1009&wbnewsid=24264';
 
-    expect(applyRegexRedirect(youth, source)).toBe(
-      'https://youth.cqu.edu.cn/content.jsp?urltype=news.NewsContentUrl&wbtreeid=1009&wbnewsid=24264',
-    );
+    expect(applyRegexRedirect(youth, source)).toBe(target);
+    expect(
+      applyRegexRedirect(
+        youth,
+        canonicalRequestUrl('https://youth.cqu.edu.cn/info/1009/24264.htm?'),
+      ),
+    ).toBe(target);
     expect(
       applyRegexRedirect(
         youth,
