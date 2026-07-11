@@ -71,6 +71,45 @@ describe('Youth League transform', () => {
       'https://youth.cqu.edu.cn/content.jsp?urltype=news.NewsContentUrl&wbtreeid=1009&wbnewsid=24264#print',
     );
   });
+
+  it('preserves state and redirect_uri values with the fragment', () => {
+    const input =
+      'https://youth.cqu.edu.cn/info/1009/24264.htm?state=opaque%2Bstate&redirect_uri=https%3A%2F%2Fclient.example%2Fcb%3Fa%3D1%26b%3Dtwo#details';
+    expect(toYouthPublicUrl(input)).toBe(
+      'https://youth.cqu.edu.cn/content.jsp?state=opaque%2Bstate&redirect_uri=https%3A%2F%2Fclient.example%2Fcb%3Fa%3D1%26b%3Dtwo&urltype=news.NewsContentUrl&wbtreeid=1009&wbnewsid=24264#details',
+    );
+  });
+
+  it('preserves duplicate protected parameters in their original order', () => {
+    const input =
+      'https://youth.cqu.edu.cn/info/1009/24264.htm?state=first&redirect_uri=https%3A%2F%2Fa.example%2Fcb&foo=1&state=second&redirect_uri=https%3A%2F%2Fb.example%2Fcb&foo=2';
+    expect(toYouthPublicUrl(input)).toBe(
+      'https://youth.cqu.edu.cn/content.jsp?state=first&redirect_uri=https%3A%2F%2Fa.example%2Fcb&foo=1&state=second&redirect_uri=https%3A%2F%2Fb.example%2Fcb&foo=2&urltype=news.NewsContentUrl&wbtreeid=1009&wbnewsid=24264',
+    );
+  });
+
+  it('keeps the decoded redirect_uri unchanged without normalizing its encoding', () => {
+    const input =
+      'https://youth.cqu.edu.cn/info/1009/24264.htm?redirect_uri=https%3a%2f%2fclient.example%2fcb%3fq%3da%2520b';
+    const output = toYouthPublicUrl(input);
+    expect(output).toContain('redirect_uri=https%3a%2f%2fclient.example%2fcb%3fq%3da%2520b');
+    expect(new URL(output).searchParams.getAll('redirect_uri')).toEqual(
+      new URL(input).searchParams.getAll('redirect_uri'),
+    );
+  });
+
+  it('removes conflicting Youth parameters so generated values win', () => {
+    const input =
+      'https://youth.cqu.edu.cn/info/1009/24264.htm?urltype=evil&%77btreeid=9&state=keep&wbnewsid=8&urltype=again#conflict';
+    const output = toYouthPublicUrl(input);
+    const outputUrl = new URL(output);
+    expect(output).toBe(
+      'https://youth.cqu.edu.cn/content.jsp?state=keep&urltype=news.NewsContentUrl&wbtreeid=1009&wbnewsid=24264#conflict',
+    );
+    expect(outputUrl.searchParams.getAll('urltype')).toEqual(['news.NewsContentUrl']);
+    expect(outputUrl.searchParams.getAll('wbtreeid')).toEqual(['1009']);
+    expect(outputUrl.searchParams.getAll('wbnewsid')).toEqual(['24264']);
+  });
 });
 
 describe('invariants', () => {

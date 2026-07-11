@@ -3,6 +3,7 @@ import type { Transformer } from './types';
 const HTTP_PROTOCOLS = new Set(['http:', 'https:']);
 const ATRUST_SUFFIX = '.atrust.cqu.edu.cn';
 const IPV4 = /^(?:\d{1,3}\.){3}\d{1,3}$/;
+const YOUTH_PARAMETERS = new Set(['urltype', 'wbtreeid', 'wbnewsid']);
 const DECIMAL_OCTET = '(?:0|[1-9]\\d{0,2})';
 const RAW_IPV4_PORT = new RegExp(
   `^https?://(${DECIMAL_OCTET}(?:\\.${DECIMAL_OCTET}){3}):(\\d+)(?=[/?#]|$)`,
@@ -25,6 +26,12 @@ function isDnsHostname(host: string): boolean {
       label.length <= 63 &&
       /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/i.test(label),
   );
+}
+
+function queryParameterName(segment: string): string {
+  const equals = segment.indexOf('=');
+  const rawName = equals === -1 ? segment : segment.slice(0, equals);
+  return new URLSearchParams(`${rawName}=`).keys().next().value ?? '';
 }
 
 export function isAtrustUrl(input: string): boolean {
@@ -77,12 +84,17 @@ export function toYouthPublicUrl(input: string): string {
   const match = /^\/info\/(\d+)\/(\d+)\.htm$/.exec(url.pathname);
   if (!match) throw new Error('not a Youth League article');
   const [, wbtreeid, wbnewsid] = match;
-  url.pathname = '/content.jsp';
-  url.search = new URLSearchParams({
+  const preservedQuery = url.search
+    .slice(1)
+    .split('&')
+    .filter((segment) => segment && !YOUTH_PARAMETERS.has(queryParameterName(segment)));
+  const youthQuery = new URLSearchParams({
     urltype: 'news.NewsContentUrl',
     wbtreeid: wbtreeid!,
     wbnewsid: wbnewsid!,
   }).toString();
+  url.pathname = '/content.jsp';
+  url.search = [...preservedQuery, youthQuery].join('&');
   return url.toString();
 }
 
