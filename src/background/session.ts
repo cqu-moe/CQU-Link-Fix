@@ -8,6 +8,7 @@ import {
 } from '../rewrite-record';
 import { updateSettings } from '../storage/settings-repository';
 import type { SettingsMutationHooks } from '../storage/settings-types';
+import { normalizeDnsHost } from '../rules/custom-rule-policy';
 
 export { canonicalRequestUrl, sameRequestUrl, type RewriteRecord } from '../rewrite-record';
 
@@ -267,26 +268,9 @@ export async function openOriginalOnce(tabId: number): Promise<void> {
   }
 }
 
-function normalizeHost(value: string): string | null {
-  const normalized = value.trim().toLowerCase();
-  if (
-    !normalized ||
-    normalized.length > 253 ||
-    !normalized.split('.').every(
-      (label) =>
-        label.length > 0 &&
-        label.length <= 63 &&
-        /^[a-z\d](?:[a-z\d-]*[a-z\d])?$/i.test(label),
-    )
-  ) {
-    return null;
-  }
-  return normalized;
-}
-
 function hostFromHttpUrl(value: string): string {
   canonicalRequestUrl(value);
-  const host = normalizeHost(new URL(value).hostname);
+  const host = normalizeDnsHost(new URL(value).hostname);
   if (!host) throw new Error('The tab has no valid HTTP(S) host');
   return host;
 }
@@ -306,7 +290,7 @@ export async function excludeCurrentHost(
 
   await updateSettings((latest) => {
     const excludedHosts = [...latest.excludedHosts, host]
-      .map(normalizeHost)
+      .map(normalizeDnsHost)
       .filter((candidate): candidate is string => candidate !== null);
     return {
       ...latest,

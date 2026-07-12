@@ -1,4 +1,5 @@
 import type { Transformer } from './types';
+import { normalizeDnsHost } from './custom-rule-policy';
 
 const HTTP_PROTOCOLS = new Set(['http:', 'https:']);
 const ATRUST_SUFFIX = '.atrust.cqu.edu.cn';
@@ -19,13 +20,7 @@ function parseHttpUrl(input: string): URL {
 }
 
 function isDnsHostname(host: string): boolean {
-  if (host.length > 253 || !host.includes('.')) return false;
-  return host.split('.').every(
-    (label) =>
-      label.length > 0 &&
-      label.length <= 63 &&
-      /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/i.test(label),
-  );
+  return host.includes('.') && normalizeDnsHost(host) === host.toLowerCase();
 }
 
 function queryParameterName(segment: string): string {

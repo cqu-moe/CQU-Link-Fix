@@ -592,6 +592,38 @@ describe('background reconciliation hooks', () => {
     }]);
   });
 
+  it('waits for delayed startup reconciliation before exposing rule validation status', async () => {
+    mockRegexSupport().mockImplementation(async ({ regex }) =>
+      regex.includes('sso\\.cqu\\.edu\\.cn')
+        ? { isSupported: false, reason: 'syntaxError' }
+        : { isSupported: true },
+    );
+    mockGetDynamicRules().mockResolvedValue([]);
+    const startup = deferred<void>();
+    const updateDynamicRules = mockUpdateDynamicRules().mockReturnValue(startup.promise);
+    background.main!();
+    await vi.waitFor(() => expect(updateDynamicRules).toHaveBeenCalledOnce());
+
+    let settled = false;
+    const response = fakeBrowser.runtime.onMessage.trigger(
+      { type: 'get-dnr-status' },
+      { id: browser.runtime.id, url: browser.runtime.getURL('/options.html') },
+    ).then((value) => {
+      settled = true;
+      return value;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(settled).toBe(false);
+
+    startup.resolve();
+    await expect(response).resolves.toEqual([{
+      ok: true,
+      dnrStatus: {
+        errors: [{ ruleId: 'core-sso', message: expect.stringContaining('syntaxError') }],
+      },
+    }]);
+  });
+
   it('contains rejected startup and event reconciliations', async () => {
     const error = new Error('DNR unavailable');
     mockRegexSupport().mockRejectedValue(error);

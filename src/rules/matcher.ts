@@ -1,6 +1,6 @@
 import type { Browser } from 'wxt/browser';
 import { customPermissionOriginsForHost } from '../custom-permission-lease';
-import { normalizeCustomCquHost } from './custom-rule-policy';
+import { normalizeCustomCquHost, normalizeDnsHost } from './custom-rule-policy';
 import type { CustomRule, RuleDefinition, RuleMatcher } from './types';
 
 const MAIN_FRAME: NonNullable<Browser.declarativeNetRequest.RuleCondition['resourceTypes']> = [
@@ -17,19 +17,8 @@ export function escapeDnrRegex(value: string): string {
 }
 
 export function normalizeDnrHost(host: string): string {
-  const normalized = host.trim().toLowerCase();
-  if (
-    !normalized ||
-    normalized.length > 253 ||
-    !normalized.split('.').every(
-      (label) =>
-        label.length > 0 &&
-        label.length <= 63 &&
-        /^[a-z\d](?:[a-z\d-]*[a-z\d])?$/i.test(label),
-    )
-  ) {
-    throw new Error(`Invalid DNR host: ${host}`);
-  }
+  const normalized = normalizeDnsHost(host);
+  if (normalized === null) throw new Error(`Invalid DNR host: ${host}`);
   return normalized;
 }
 

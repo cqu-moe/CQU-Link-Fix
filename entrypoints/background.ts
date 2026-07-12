@@ -261,59 +261,64 @@ function scheduleTopFrameRewrite(
 async function dispatchBackgroundMessage(
   message: BackgroundMessage,
 ): Promise<BackgroundResponse> {
-  if (message.type === 'acquire-custom-permission-lease') {
-    const lease = await acquireCustomPermissionLease(message.origins);
-    return { ok: true, leaseNonce: lease.nonce };
+  switch (message.type) {
+    case 'acquire-custom-permission-lease': {
+      const lease = await acquireCustomPermissionLease(message.origins);
+      return { ok: true, leaseNonce: lease.nonce };
+    }
+    case 'renew-custom-permission-lease': {
+      const lease = await renewCustomPermissionLease(message.nonce, message.origins);
+      return { ok: true, leaseExpiresAt: lease.expiresAt };
+    }
+    case 'release-custom-permission-lease':
+      await releaseCustomPermissionLease(message.nonce, {
+        cleanupOrigins: message.cleanupOrigins,
+      });
+      return { ok: true };
+    case 'replace-settings': {
+      const snapshot = await replaceSettingsAtRevision(
+        message.settings,
+        message.expectedRevision,
+        settingsMutationHooks,
+      );
+      return { ok: true, revision: snapshot.revision };
+    }
+    case 'get-settings-snapshot':
+      return { ok: true, snapshot: await loadCommittedSettingsSnapshot() };
+    case 'get-dnr-status':
+      await startupReconciliation;
+      return { ok: true, dnrStatus: getDnrReconciliationStatus() };
+    case 'reconcile-all-cqu-mode': {
+      const snapshot = await updateSettingsSnapshot(async (current) => {
+        if (!message.requested) {
+          try { await browser.permissions.remove(CQU_OPTIONAL_ORIGINS); } catch { /* Recheck below. */ }
+        }
+        let granted = false;
+        try { granted = await browser.permissions.contains(CQU_OPTIONAL_ORIGINS); } catch { granted = false; }
+        if (current.enableAllCquDomains === granted) return current;
+        return { ...current, enableAllCquDomains: granted };
+      }, settingsMutationHooks);
+      return {
+        ok: true,
+        revision: snapshot.revision,
+        enabled: snapshot.settings.enableAllCquDomains,
+      };
+    }
+    case 'get-tab-state':
+      return { ok: true, state: await getTabState(message.tabId) };
+    case 'open-original-once':
+      await queueTabFinalization(message.tabId, () => openOriginalOnce(message.tabId));
+      return { ok: true };
+    case 'exclude-current-host':
+      await excludeCurrentHost(message.tabId, settingsMutationHooks);
+      return { ok: true };
+    default:
+      return assertNeverBackgroundMessage(message);
   }
-  if (message.type === 'renew-custom-permission-lease') {
-    const lease = await renewCustomPermissionLease(message.nonce, message.origins);
-    return { ok: true, leaseExpiresAt: lease.expiresAt };
-  }
-  if (message.type === 'release-custom-permission-lease') {
-    await releaseCustomPermissionLease(message.nonce, {
-      cleanupOrigins: message.cleanupOrigins,
-    });
-    return { ok: true };
-  }
-  if (message.type === 'replace-settings') {
-    const snapshot = await replaceSettingsAtRevision(
-      message.settings,
-      message.expectedRevision,
-      settingsMutationHooks,
-    );
-    return { ok: true, revision: snapshot.revision };
-  }
-  if (message.type === 'get-settings-snapshot') {
-    return { ok: true, snapshot: await loadCommittedSettingsSnapshot() };
-  }
-  if (message.type === 'get-dnr-status') {
-    return { ok: true, dnrStatus: getDnrReconciliationStatus() };
-  }
-  if (message.type === 'reconcile-all-cqu-mode') {
-    const snapshot = await updateSettingsSnapshot(async (current) => {
-      if (!message.requested) {
-        try { await browser.permissions.remove(CQU_OPTIONAL_ORIGINS); } catch { /* Recheck below. */ }
-      }
-      let granted = false;
-      try { granted = await browser.permissions.contains(CQU_OPTIONAL_ORIGINS); } catch { granted = false; }
-      if (current.enableAllCquDomains === granted) return current;
-      return { ...current, enableAllCquDomains: granted };
-    }, settingsMutationHooks);
-    return {
-      ok: true,
-      revision: snapshot.revision,
-      enabled: snapshot.settings.enableAllCquDomains,
-    };
-  }
-  if (message.type === 'get-tab-state') {
-    return { ok: true, state: await getTabState(message.tabId) };
-  }
-  if (message.type === 'open-original-once') {
-    await queueTabFinalization(message.tabId, () => openOriginalOnce(message.tabId));
-    return { ok: true };
-  }
-  await excludeCurrentHost(message.tabId, settingsMutationHooks);
-  return { ok: true };
+}
+
+function assertNeverBackgroundMessage(message: never): never {
+  throw new Error(`Unsupported background message: ${JSON.stringify(message)}`);
 }
 
 function handleRuntimeMessage(

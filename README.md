@@ -62,10 +62,18 @@ pnpm verify
 pnpm zip
 ```
 
-`pnpm test:e2e` 会重新构建并运行 loaded-extension 自动化测试；默认 E2E 使用本地路由 fixture，因此不能替代[真实网络烟测](docs/validation/live-smoke.md)。可选权限的真实 headed 门禁命令为：
+`pnpm test:e2e` 会重新构建并运行 loaded-extension 自动化测试；默认 E2E 使用本地路由 fixture，因此不能替代[真实网络烟测](docs/validation/live-smoke.md)。可选权限批准门需在弹窗中批准两个请求：
 
 ```bash
-CQU_E2E_PERMISSION_GATE=1 CQU_E2E_HEADED=1 pnpm test:e2e --grep "grants exact custom" --timeout=120000
+pnpm build
+CQU_E2E_PERMISSION_GATE=1 CQU_E2E_HEADED=1 pnpm exec playwright test --grep "grants exact custom" --timeout=120000
+```
+
+可选权限拒绝门只请求“全部 CQU 域名”权限；运行后在 Chromium 原生弹窗中点击拒绝。测试会确认全域模式仍关闭、通配权限未授予、核心 SSO 精确规则仍正常：
+
+```bash
+pnpm build
+CQU_E2E_PERMISSION_DENIAL_GATE=1 CQU_E2E_HEADED=1 pnpm exec playwright test --grep "after prompt rejection" --timeout=120000
 ```
 
 ## 验证状态

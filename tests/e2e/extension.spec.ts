@@ -342,7 +342,7 @@ test.describe('rewrite records, UI, and original bypass', () => {
   });
 });
 
-test.describe('manual optional-permission gate', () => {
+test.describe('manual optional-permission approval gate', () => {
   test.skip(
     process.env.CQU_E2E_PERMISSION_GATE !== '1',
     'Chromium optional-permission prompts are browser chrome; run headed with CQU_E2E_PERMISSION_GATE=1 and approve both prompts.',
@@ -398,5 +398,35 @@ test.describe('manual optional-permission gate', () => {
     await popup.locator('#open-original').click();
     await expect.poll(() => page.url()).toBe(original);
     await expect.poll(() => sessionState(extension, tabId)).toEqual({ stored: {}, rules: [] });
+  });
+});
+
+test.describe('manual optional-permission denial gate', () => {
+  test.skip(
+    process.env.CQU_E2E_PERMISSION_DENIAL_GATE !== '1',
+    'Run headed and reject the all-CQU optional-permission prompt.',
+  );
+
+  test('keeps all-CQU disabled and core rewrites active after prompt rejection', async ({ extension }) => {
+    test.setTimeout(120_000);
+    const options = await extension.openExtensionPage('options.html', true);
+    await options.bringToFront();
+    await expect(options.locator('#status')).toContainText('设置已加载');
+
+    await options.locator('#all-cqu-enabled').click();
+    await expect(options.locator('#all-cqu-enabled')).not.toBeChecked({ timeout: 60_000 });
+    await expect(options.locator('#status')).toContainText('未授予全部 CQU 域名权限');
+    await expect.poll(() => extension.worker.evaluate(() => chrome.permissions.contains({
+      origins: ['*://cqu.edu.cn/*', '*://*.cqu.edu.cn/*'],
+    }))).toBe(false);
+    await expect.poll(() => extension.worker.evaluate(async () => {
+      const settings = (await chrome.storage.local.get('settings')).settings as
+        { enableAllCquDomains?: unknown } | undefined;
+      return settings?.enableAllCquDomains;
+    })).toBe(false);
+
+    const page = await extension.context.newPage();
+    await page.goto('https://sso.cqu.edu.cn/login?service=%2Fpermission-denied');
+    expect(new URL(page.url()).hostname).toBe(SSO_TARGET);
   });
 });

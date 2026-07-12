@@ -7,7 +7,7 @@
 - 本页真实网络观察对应运行时代码提交 `e138044f07ca304de2cf81c5d5f935495bf5b17f`（`test: cover browser redirect flows`）。测试使用的 zip SHA-256 为 `b70a43e71517e81e5ad2326d87ac348f26039f789a4ad3e8bb3c1e4145bfe24f`。
 - 该版本启动后观察到的 2 条动态规则仅为当时的 SSO 与团委重定向规则。这是历史实测值，不代表后续提交或当前 HEAD 的规则数量。
 - 后续 `cc8c1917131d01c5710b7a04071cf1684469d5d2` 与 `82aafd054e88c7c9c538d916d5131e640164fbd5` 增加并校准了顶层 CAS `ticket` 的高优先级 allow 防护；这些改动通过单元测试和 loaded-Chromium E2E 验证，但没有重新执行本页真实网络烟测。因此不得把本页结果表述为最终 HEAD 的 live PASS。
-- 2026-07-13 在本文所在提交重新运行 production build + loaded-extension Playwright：16 条自动化用例 PASS，浏览器原生可选权限弹窗的 headed 人工用例默认 SKIP。新增自动化覆盖链接点击、真实 HTTP 302 响应触发的 CAS 导航、前进/后退无循环、停用内置规则后重启 service worker 仍保留选择，以及 Popup 运行状态。该证据使用本地 fixture，不属于下表的真实网络 PASS。
+- 2026-07-13 在本文所在提交重新运行 production build + loaded-extension Playwright：16 条自动化用例 PASS，浏览器原生可选权限批准/拒绝的 2 条 headed 人工用例默认 SKIP。新增自动化覆盖链接点击、真实 HTTP 302 响应触发的 CAS 导航、前进/后退无循环、停用内置规则后重启 service worker 仍保留选择，以及 Popup 运行状态。该证据使用本地 fixture，不属于下表的真实网络 PASS。
 
 | Date | Network | aTrust client | Original URL | Rewritten URL | Login page | Original service preserved | Client session established | Result |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -26,7 +26,7 @@
 - 链接点击与服务器 HTTP 302 均从非 SSO 页面发起，最终主框架被扩展改写到 aTrust SSO 主机，CAS `service` 解码值保持不变。
 - 对改写目标执行浏览器后退、再次后退、前进、再次前进，导航在来源页、aTrust 目标与后续页之间稳定切换，没有重复改写循环。
 - 通过 Options 的后台 settings mutation 停用 `core-sso`，停止并重新唤醒真实 MV3 service worker 后，稳定规则 ID 覆盖仍保留，原始 SSO 地址不再改写。
-- 权限拒绝的确定性状态变化由单元测试覆盖；Chromium 浏览器 chrome 中的真实拒绝按钮仍必须用 `CQU_E2E_PERMISSION_GATE=1 CQU_E2E_HEADED=1` 人工执行。
+- 权限拒绝的确定性状态变化由单元测试覆盖；Chromium 浏览器 chrome 中的真实拒绝按钮用 `CQU_E2E_PERMISSION_DENIAL_GATE=1 CQU_E2E_HEADED=1 pnpm exec playwright test --grep "after prompt rejection" --timeout=120000` 人工执行。操作员必须在唯一的“全部 CQU 域名”原生提示中点击拒绝；用例随后断言开关关闭、通配权限不存在且核心 SSO 仍改写。
 - 上述自动化不提交凭据、不建立真实客户端业务会话，也不能解除校园网/校外网和 Youth HTTP 412 发布门禁。
 
 ## 可观察证据
