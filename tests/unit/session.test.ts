@@ -17,6 +17,7 @@ import {
   retryPendingCustomPermissionCleanup,
 } from '../../src/background/custom-permission-leases';
 import {
+  CQU_OPTIONAL_ORIGINS,
   DEFAULT_SETTINGS,
   loadSettings,
   loadSettingsSnapshot,
@@ -1617,6 +1618,107 @@ describe('background session lifecycle, errors, and messages', () => {
     expect(remove).not.toHaveBeenCalled();
     expect((await browser.storage.local.get('customPermissionCleanupOrigins'))
       .customPermissionCleanupOrigins).toBeUndefined();
+  });
+
+  it('protects all-CQU apex during stale-false reconstruction when the wildcard is actually granted', async () => {
+    const libraryOrigins = [
+      '*://library.cqu.edu.cn/*',
+      'https://library-cqu-edu-cn-s.atrust.cqu.edu.cn/*',
+    ];
+    await saveSettings(DEFAULT_SETTINGS);
+    const getAll = vi.spyOn(browser.permissions, 'getAll').mockResolvedValue({
+      permissions: [],
+      origins: [...CQU_OPTIONAL_ORIGINS.origins, ...libraryOrigins],
+    } as never);
+    const remove = vi.spyOn(browser.permissions, 'remove').mockResolvedValue(true as never);
+
+    await startBackground();
+
+    await vi.waitFor(() => expect(remove).toHaveBeenCalledWith({ origins: libraryOrigins }));
+    expect(remove).toHaveBeenCalledOnce();
+    expect(getAll).toHaveBeenCalledOnce();
+  });
+
+  it('retains existing apex debt while settling an ordinary orphan from the same granted snapshot', async () => {
+    const apex = CQU_OPTIONAL_ORIGINS.origins[0]!;
+    const libraryOrigins = [
+      '*://library.cqu.edu.cn/*',
+      'https://library-cqu-edu-cn-s.atrust.cqu.edu.cn/*',
+    ];
+    await saveSettings(DEFAULT_SETTINGS);
+    await browser.storage.local.set({
+      customPermissionCleanupOrigins: [apex, ...libraryOrigins],
+    });
+    const getAll = vi.spyOn(browser.permissions, 'getAll').mockResolvedValue({
+      permissions: [],
+      origins: [...CQU_OPTIONAL_ORIGINS.origins, ...libraryOrigins],
+    } as never);
+    const remove = vi.spyOn(browser.permissions, 'remove').mockResolvedValue(true as never);
+
+    await startBackground();
+
+    await vi.waitFor(() => expect(remove).toHaveBeenCalledWith({ origins: libraryOrigins }));
+    expect(getAll).toHaveBeenCalledOnce();
+    expect((await browser.storage.local.get('customPermissionCleanupOrigins'))
+      .customPermissionCleanupOrigins).toEqual([apex]);
+  });
+
+  it('conservatively retains apex debt when actual grant state is unavailable', async () => {
+    const apex = CQU_OPTIONAL_ORIGINS.origins[0]!;
+    const libraryOrigins = [
+      '*://library.cqu.edu.cn/*',
+      'https://library-cqu-edu-cn-s.atrust.cqu.edu.cn/*',
+    ];
+    await saveSettings(DEFAULT_SETTINGS);
+    await browser.storage.local.set({
+      customPermissionCleanupOrigins: [apex, ...libraryOrigins],
+    });
+    const getAll = vi.spyOn(browser.permissions, 'getAll')
+      .mockRejectedValue(new Error('permission snapshot unavailable'));
+    const remove = vi.spyOn(browser.permissions, 'remove').mockResolvedValue(true as never);
+
+    await startBackground();
+
+    await vi.waitFor(() => expect(remove).toHaveBeenCalledWith({ origins: libraryOrigins }));
+    expect(getAll).toHaveBeenCalledOnce();
+    expect((await browser.storage.local.get('customPermissionCleanupOrigins'))
+      .customPermissionCleanupOrigins).toEqual([apex]);
+  });
+
+  it('shares one wildcard grant snapshot with settlement while its permission event waits in the queue', async () => {
+    const apex = CQU_OPTIONAL_ORIGINS.origins[0]!;
+    await saveSettings(DEFAULT_SETTINGS);
+    await browser.storage.local.set({ customPermissionCleanupOrigins: [apex] });
+    let onPermissionAdded: Parameters<typeof browser.permissions.onAdded.addListener>[0] | null = null;
+    vi.spyOn(browser.permissions.onAdded, 'addListener').mockImplementation((listener) => {
+      onPermissionAdded = listener;
+    });
+    const granted = deferred<Browser.permissions.Permissions>();
+    const getAll = vi.spyOn(browser.permissions, 'getAll').mockReturnValue(granted.promise as never);
+    vi.spyOn(browser.permissions, 'contains').mockResolvedValue(true as never);
+    const remove = vi.spyOn(browser.permissions, 'remove').mockResolvedValue(true as never);
+
+    await startBackground();
+    await vi.waitFor(() => expect(getAll).toHaveBeenCalledOnce());
+    expect(onPermissionAdded).not.toBeNull();
+    onPermissionAdded!({
+      origins: [...CQU_OPTIONAL_ORIGINS.origins],
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect((await loadSettings()).enableAllCquDomains).toBe(false);
+
+    granted.resolve({
+      permissions: [],
+      origins: [...CQU_OPTIONAL_ORIGINS.origins],
+    });
+
+    await vi.waitFor(async () =>
+      expect((await loadSettings()).enableAllCquDomains).toBe(true),
+    );
+    expect(getAll).toHaveBeenCalledOnce();
+    expect(remove).not.toHaveBeenCalled();
+    expect((await browser.storage.local.get('customPermissionCleanupOrigins'))
+      .customPermissionCleanupOrigins).toEqual([apex]);
   });
 });
 
