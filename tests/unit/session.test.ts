@@ -1379,7 +1379,7 @@ describe('background session lifecycle, errors, and messages', () => {
     await expect(response).resolves.toEqual([{ ok: true, revision: 2 }]);
   });
 
-  it('does not revoke deleted custom-rule origins while an active lease owns them', async () => {
+  it('defers deleted-rule cleanup until the active same-origin lease releases', async () => {
     const customRule = {
       id: 'leased-rule', dnrId: 10_001, name: 'library.cqu.edu.cn', description: 'custom',
       category: 'custom' as const, defaultEnabled: true,
@@ -1388,13 +1388,13 @@ describe('background session lifecycle, errors, and messages', () => {
     };
     await saveSettings({ ...DEFAULT_SETTINGS, customRules: [customRule] });
     await startBackground();
-    await fakeBrowser.runtime.onMessage.trigger({
+    const acquired = (await fakeBrowser.runtime.onMessage.trigger({
       type: 'acquire-custom-permission-lease',
       origins: [
         '*://library.cqu.edu.cn/*',
         'https://library-cqu-edu-cn-s.atrust.cqu.edu.cn/*',
       ],
-    }, { id: browser.runtime.id });
+    }, { id: browser.runtime.id }))[0] as unknown as { ok: true; leaseNonce: string };
     const remove = vi.spyOn(browser.permissions, 'remove').mockResolvedValue(true as never);
 
     await expect(fakeBrowser.runtime.onMessage.trigger({
@@ -1408,6 +1408,25 @@ describe('background session lifecycle, errors, and messages', () => {
       },
     }, { id: browser.runtime.id })).resolves.toEqual([{ ok: true, revision: 2 }]);
     expect(remove).not.toHaveBeenCalled();
+    expect((await browser.storage.session.get('customPermissionCleanupOrigins'))
+      .customPermissionCleanupOrigins).toEqual([
+        '*://library.cqu.edu.cn/*',
+        'https://library-cqu-edu-cn-s.atrust.cqu.edu.cn/*',
+      ]);
+
+    await expect(fakeBrowser.runtime.onMessage.trigger({
+      type: 'release-custom-permission-lease',
+      nonce: acquired.leaseNonce,
+      cleanupOrigins: [],
+    }, { id: browser.runtime.id })).resolves.toEqual([{ ok: true }]);
+    expect(remove).toHaveBeenCalledWith({
+      origins: [
+        '*://library.cqu.edu.cn/*',
+        'https://library-cqu-edu-cn-s.atrust.cqu.edu.cn/*',
+      ],
+    });
+    expect((await browser.storage.session.get('customPermissionCleanupOrigins'))
+      .customPermissionCleanupOrigins).toEqual([]);
   });
 });
 

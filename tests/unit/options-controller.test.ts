@@ -167,6 +167,24 @@ describe('options controller', () => {
     expect(text('status')).toContain('保存失败');
   });
 
+  it('shows an actionable reconciliation error for settings-apply-failed', async () => {
+    const deps = dependencies({
+      replaceSettings: vi.fn().mockResolvedValue({
+        ok: false,
+        code: 'settings-apply-failed',
+        error: 'Settings application failed: DNR unavailable',
+      }),
+    });
+    await initializeOptionsController(document, deps);
+
+    checkbox('master-enabled').click();
+    await settle();
+
+    expect(checkbox('master-enabled').checked).toBe(true);
+    expect(text('status')).toContain('规则运行状态同步失败');
+    expect(text('status')).toContain('DNR unavailable');
+  });
+
   it.each([3, 2, 5])(
     'rejects non-successor CAS revision %s without changing saved UI state',
     async (revision) => {
@@ -262,6 +280,22 @@ describe('options controller', () => {
     expect(checkbox('all-cqu-enabled').checked).toBe(false);
     expect(text('status')).toContain('未授予');
     expect(deps.getSnapshot).toHaveBeenCalledTimes(2);
+  });
+
+  it('shows failed all-CQU disable as an error and keeps the reloaded switch enabled', async () => {
+    const enabled = snapshot({ ...DEFAULT_SETTINGS, enableAllCquDomains: true }, 4);
+    const deps = dependencies({
+      setAllCquMode: vi.fn().mockResolvedValue(false),
+      getSnapshot: vi.fn().mockResolvedValue(enabled),
+    });
+    await initializeOptionsController(document, deps);
+
+    checkbox('all-cqu-enabled').click();
+    await settle();
+
+    expect(checkbox('all-cqu-enabled').checked).toBe(true);
+    expect(text('status')).toContain('无法关闭');
+    expect(text('status')).not.toContain('已关闭');
   });
 
   it('contains a synchronous all-CQU failure, reloads, and restores controls', async () => {

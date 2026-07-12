@@ -170,7 +170,9 @@ function isReplaceResult(
       candidate.revision === expectedRevision + 1;
   }
   return candidate.ok === false &&
-    (candidate.code === 'settings-conflict' || candidate.code === 'operation-failed') &&
+    (candidate.code === 'settings-conflict' ||
+      candidate.code === 'settings-apply-failed' ||
+      candidate.code === 'operation-failed') &&
     typeof candidate.error === 'string' && Boolean(candidate.error.trim());
 }
 
@@ -266,6 +268,11 @@ export async function initializeOptionsController(
         setStatus('设置已在其他页面更新，但无法重新读取；请刷新页面后再试。', 'error');
       }
       return { outcome: 'conflict', snapshotAfterFailure: fresh };
+    }
+    if (response.code === 'settings-apply-failed') {
+      saved = before;
+      setStatus(`规则运行状态同步失败：${response.error}。请重试；若问题持续，请刷新页面。`, 'error');
+      return { outcome: 'failure' };
     }
     saved = before;
     setStatus(`操作未完成：${response.error}`, 'error');
@@ -456,10 +463,14 @@ export async function initializeOptionsController(
         fresh = null;
       }
       if (fresh) saved = fresh;
-      if (!changed && requested) {
-        setStatus('未授予全部 CQU 域名权限；全域模式保持关闭。', 'error');
-      } else if (!fresh) {
+      if (!fresh) {
         setStatus('权限操作后无法重新读取设置，请刷新页面确认状态。', 'error');
+      } else if (fresh.settings.enableAllCquDomains !== requested) {
+        setStatus(requested
+          ? '未授予全部 CQU 域名权限；全域模式保持关闭。'
+          : '无法关闭全部 CQU 域名模式；通配域名权限仍然存在。', 'error');
+      } else if (!changed && requested) {
+        setStatus('未授予全部 CQU 域名权限；全域模式保持关闭。', 'error');
       } else {
         setStatus(requested ? '全部 CQU 域名模式已启用' : '全部 CQU 域名模式已关闭', 'success');
       }

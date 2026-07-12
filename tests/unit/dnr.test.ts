@@ -32,6 +32,7 @@ type StorageGet = (
 interface Deferred<T> {
   promise: Promise<T>;
   resolve: (value: T) => void;
+  reject: (reason: unknown) => void;
 }
 
 function mockRegexSupport(): MockInstance<RegexSupport> {
@@ -56,10 +57,12 @@ function mockStorageGet(): MockInstance<StorageGet> {
 
 function deferred<T>(): Deferred<T> {
   let resolve!: (value: T) => void;
-  const promise = new Promise<T>((next) => {
+  let reject!: (reason: unknown) => void;
+  const promise = new Promise<T>((next, fail) => {
     resolve = next;
+    reject = fail;
   });
-  return { promise, resolve };
+  return { promise, resolve, reject };
 }
 
 function canonicalRequestUrl(input: string): string {
@@ -541,6 +544,66 @@ describe('background reconciliation hooks', () => {
     });
   });
 
+  it('holds snapshot and navigation reads behind a failed candidate until rollback commits', async () => {
+    await saveSettings(DEFAULT_SETTINGS);
+    mockRegexSupport().mockResolvedValue({ isSupported: true });
+    mockGetDynamicRules().mockResolvedValue([]);
+    const candidateApply = deferred<void>();
+    const updateDynamicRules = mockUpdateDynamicRules()
+      .mockResolvedValueOnce()
+      .mockReturnValueOnce(candidateApply.promise)
+      .mockResolvedValueOnce();
+    background.main!();
+    await vi.waitFor(() => expect(updateDynamicRules).toHaveBeenCalledOnce());
+    const localGet = vi.spyOn(browser.storage.local, 'get');
+
+    const mutation = fakeBrowser.runtime.onMessage.trigger({
+      type: 'replace-settings',
+      expectedRevision: 1,
+      settings: {
+        enabled: false,
+        disabledRuleIds: [],
+        customRules: [],
+        excludedHosts: [],
+      },
+    }, { id: browser.runtime.id });
+    await vi.waitFor(() => expect(updateDynamicRules).toHaveBeenCalledTimes(2));
+    const readsBefore = localGet.mock.calls.length;
+    let snapshotSettled = false;
+    const snapshot = fakeBrowser.runtime.onMessage.trigger(
+      { type: 'get-settings-snapshot' },
+      { id: browser.runtime.id },
+    ).then((value) => {
+      snapshotSettled = true;
+      return value;
+    });
+    await fakeBrowser.webNavigation.onBeforeNavigate.trigger(
+      navigationDetails('https://sso.cqu.edu.cn/login'),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const settledBeforeRollback = snapshotSettled;
+    const readsDuringCandidate = localGet.mock.calls.length;
+
+    candidateApply.reject(new Error('candidate apply failed'));
+    await expect(mutation).resolves.toEqual([{
+      ok: false,
+      code: 'settings-apply-failed',
+      error: expect.any(String),
+    }]);
+    await expect(snapshot).resolves.toEqual([{
+      ok: true,
+      snapshot: { settings: DEFAULT_SETTINGS, revision: 1 },
+    }]);
+    expect(settledBeforeRollback).toBe(false);
+    expect(readsDuringCandidate).toBe(readsBefore);
+    await vi.waitFor(() =>
+      expect(browser.storage.session.get('rewrite:7')).resolves.toMatchObject({
+        'rewrite:7': { ruleId: 'core-sso' },
+      }),
+    );
+  });
+
   it('manually completes a built-in rewrite that starts before fresh-worker DNR readiness', async () => {
     await saveSettings(DEFAULT_SETTINGS);
     mockRegexSupport().mockResolvedValue({ isSupported: true });
@@ -559,6 +622,26 @@ describe('background reconciliation hooks', () => {
     await vi.waitFor(() => expect(updateTab).toHaveBeenCalledWith(7, {
       url: 'https://sso-cqu-edu-cn-s.atrust.cqu.edu.cn/login',
     }));
+  });
+
+  it('does not manually compete with persisted DNR during a worker restart', async () => {
+    await saveSettings(DEFAULT_SETTINGS);
+    mockRegexSupport().mockResolvedValue({ isSupported: true });
+    const persisted = compileDynamicRules(BUILT_IN_RULES, []);
+    mockGetDynamicRules().mockResolvedValue(persisted);
+    const startup = deferred<void>();
+    mockUpdateDynamicRules().mockReturnValueOnce(startup.promise);
+    const updateTab = mockUpdateTab().mockResolvedValue(undefined);
+    background.main!();
+
+    await fakeBrowser.webNavigation.onBeforeNavigate.trigger(
+      navigationDetails('https://sso.cqu.edu.cn/login'),
+    );
+    startup.resolve();
+    await startup.promise;
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(updateTab).not.toHaveBeenCalled();
   });
 });
 

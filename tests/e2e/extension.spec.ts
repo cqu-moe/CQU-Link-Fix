@@ -4,11 +4,32 @@ import {
   activeTabId,
   expect,
   rewriteRecord,
+  beginExtensionWorkerRestart,
   sessionState,
   test,
 } from './helpers';
 
 const SSO_TARGET = 'sso-cqu-edu-cn-s.atrust.cqu.edu.cn';
+
+async function countSsoTargetNavigations(
+  extension: import('./helpers').ExtensionApp,
+  clearDynamicRules: boolean,
+): Promise<number> {
+  const restart = await beginExtensionWorkerRestart(extension, { clearDynamicRules });
+  const page = await extension.context.newPage();
+  let targetNavigations = 0;
+  page.on('request', (request) => {
+    if (
+      request.isNavigationRequest() &&
+      new URL(request.url()).hostname === SSO_TARGET
+    ) targetNavigations += 1;
+  });
+  await gotoWithBackgroundRedirect(page, 'https://sso.cqu.edu.cn/login?service=%2Fclient');
+  await restart.restarted;
+  await expect.poll(() => new URL(page.url()).hostname).toBe(SSO_TARGET);
+  await page.waitForTimeout(100);
+  return targetNavigations;
+}
 
 async function gotoWithBackgroundRedirect(
   page: import('@playwright/test').Page,
@@ -16,6 +37,16 @@ async function gotoWithBackgroundRedirect(
 ): Promise<void> {
   try {
     await page.goto(url);
+  } catch (error) {
+    if (!(error instanceof Error) || !error.message.includes('net::ERR_ABORTED')) throw error;
+  }
+}
+
+async function reloadWithBackgroundRedirect(
+  page: import('@playwright/test').Page,
+): Promise<void> {
+  try {
+    await page.reload();
   } catch (error) {
     if (!(error instanceof Error) || !error.message.includes('net::ERR_ABORTED')) throw error;
   }
@@ -128,6 +159,16 @@ test.describe('loaded extension redirects', () => {
   });
 });
 
+test.describe('service-worker startup fallback boundary', () => {
+  test('completes one target navigation from a fresh empty-DNR worker start', async ({ extension }) => {
+    expect(await countSsoTargetNavigations(extension, true)).toBe(1);
+  });
+
+  test('does not double-navigate when persisted DNR survives a worker restart', async ({ extension }) => {
+    expect(await countSsoTargetNavigations(extension, false)).toBe(1);
+  });
+});
+
 test.describe('rewrite records, UI, and original bypass', () => {
   test('records the SSO winner, renders popup state, and consumes one DNR bypass', async ({ extension }) => {
     const page = await extension.context.newPage();
@@ -181,7 +222,7 @@ test.describe('rewrite records, UI, and original bypass', () => {
     await expect.poll(() => sessionState(extension, tabId)).toEqual({ stored: {}, rules: [] });
     expect(page.url()).toBe(original);
 
-    await page.reload();
+    await reloadWithBackgroundRedirect(page);
     await expect.poll(() => page.url()).toBe(rewritten);
   });
 
@@ -204,6 +245,7 @@ test.describe('manual optional-permission gate', () => {
   test('grants exact custom and all-CQU permissions only from real options gestures', async ({ extension }) => {
     test.setTimeout(120_000);
     const options = await extension.openExtensionPage('options.html', true);
+    await options.bringToFront();
     await expect(options.locator('#status')).toContainText('设置已加载');
 
     await options.locator('#custom-host').fill('library.cqu.edu.cn');

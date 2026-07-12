@@ -55,6 +55,14 @@ export async function loadSettings(): Promise<ExtensionSettings> {
   return (await loadSettingsSnapshot()).settings;
 }
 
+export async function loadCommittedSettings(): Promise<ExtensionSettings> {
+  return (await loadCommittedSettingsSnapshot()).settings;
+}
+
+export function loadCommittedSettingsSnapshot(): Promise<SettingsSnapshot> {
+  return queueBackgroundOperation(loadSettingsSnapshot);
+}
+
 export async function loadSettingsSnapshot(): Promise<SettingsSnapshot> {
   const stored = await browser.storage.local.get([SETTINGS_KEY, SETTINGS_REVISION_KEY]);
   const value = stored[SETTINGS_KEY];

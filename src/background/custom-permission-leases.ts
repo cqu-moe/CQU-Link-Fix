@@ -12,6 +12,7 @@ import { loadSettings, type ExtensionSettings } from '../storage/settings';
 import { queueBackgroundOperation } from './coordination';
 
 const LEASES_KEY = 'customPermissionLeases';
+const PENDING_CLEANUP_KEY = 'customPermissionCleanupOrigins';
 
 async function loadActiveLeases(now: number): Promise<CustomPermissionLeaseRecord[]> {
   const stored = await browser.storage.session.get(LEASES_KEY);
@@ -27,6 +28,21 @@ async function writeLeases(leases: readonly CustomPermissionLeaseRecord[]): Prom
   await browser.storage.session.set({ [LEASES_KEY]: structuredClone(leases) });
 }
 
+async function loadPendingCleanupOrigins(): Promise<string[]> {
+  const stored = await browser.storage.session.get(PENDING_CLEANUP_KEY);
+  try {
+    return parseCustomPermissionCleanupOrigins(stored[PENDING_CLEANUP_KEY] ?? []);
+  } catch {
+    return [];
+  }
+}
+
+async function writePendingCleanupOrigins(origins: readonly string[]): Promise<void> {
+  await browser.storage.session.set({
+    [PENDING_CLEANUP_KEY]: parseCustomPermissionCleanupOrigins(origins),
+  });
+}
+
 async function removeExactOrigins(origins: readonly string[]): Promise<void> {
   if (origins.length === 0) return;
   const removed = await browser.permissions.remove({ origins: [...origins] });
@@ -35,6 +51,33 @@ async function removeExactOrigins(origins: readonly string[]): Promise<void> {
     browser.permissions.contains({ origins: [origin] }),
   ));
   if (stillGranted.some(Boolean)) throw new Error('Custom permission cleanup was not completed');
+}
+
+async function settlePendingCleanup(
+  candidates: readonly string[],
+  settings: ExtensionSettings,
+  activeLeases: readonly CustomPermissionLeaseRecord[],
+): Promise<void> {
+  const pending = parseCustomPermissionCleanupOrigins([
+    ...await loadPendingCleanupOrigins(),
+    ...candidates,
+  ]);
+  if (pending.length === 0) return;
+
+  // Persist the debt before attempting a fallible permission API call.
+  await writePendingCleanupOrigins(pending);
+  const requiredOrigins = new Set(activeLeases.flatMap((lease) => lease.origins));
+  for (const rule of settings.customRules) {
+    if (rule.matcher.kind !== 'host') continue;
+    for (const origin of customPermissionOriginsForHost(rule.matcher.host)) {
+      requiredOrigins.add(origin);
+    }
+  }
+  const removableOrigins = pending.filter((origin) => !requiredOrigins.has(origin));
+  await removeExactOrigins(removableOrigins);
+  await writePendingCleanupOrigins(
+    pending.filter((origin) => requiredOrigins.has(origin)),
+  );
 }
 
 export async function cleanupDeletedCustomRulePermissions(
@@ -51,18 +94,15 @@ export async function cleanupDeletedCustomRulePermissions(
   if (cleanupCandidates.size === 0) return;
 
   const activeLeases = await loadActiveLeases(now);
-  const requiredOrigins = new Set(activeLeases.flatMap((lease) => lease.origins));
-  for (const rule of next.customRules) {
-    if (rule.matcher.kind !== 'host') continue;
-    for (const origin of customPermissionOriginsForHost(rule.matcher.host)) {
-      requiredOrigins.add(origin);
-    }
-  }
-  const removableOrigins = [...cleanupCandidates]
-    .filter((origin) => !requiredOrigins.has(origin))
-    .sort();
-  if (removableOrigins.length === 0) return;
-  await removeExactOrigins(removableOrigins);
+  await settlePendingCleanup([...cleanupCandidates], next, activeLeases);
+}
+
+export function retryPendingCustomPermissionCleanup(now = Date.now()): Promise<void> {
+  return queueBackgroundOperation(async () => {
+    const settings = await loadSettings();
+    const activeLeases = await loadActiveLeases(now);
+    await settlePendingCleanup([], settings, activeLeases);
+  });
 }
 
 export async function acquireCustomPermissionLease(
@@ -136,16 +176,7 @@ export async function releaseCustomPermissionLease(
     }
     const remaining = leases.filter((lease) => lease.nonce !== nonce);
     const settings = await loadSettings();
-    const requiredOrigins = new Set(remaining.flatMap((lease) => lease.origins));
-    for (const rule of settings.customRules) {
-      if (rule.matcher.kind !== 'host') continue;
-      for (const origin of customPermissionOriginsForHost(rule.matcher.host)) {
-        requiredOrigins.add(origin);
-      }
-    }
     await writeLeases(remaining);
-    const removableOrigins = cleanupOrigins.filter((origin) => !requiredOrigins.has(origin));
-    if (removableOrigins.length === 0) return;
-    await removeExactOrigins(removableOrigins);
+    await settlePendingCleanup(cleanupOrigins, settings, remaining);
   });
 }

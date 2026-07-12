@@ -206,3 +206,54 @@ export async function sessionState(app: ExtensionApp, tabId: number): Promise<un
     };
   }, tabId);
 }
+
+export async function beginExtensionWorkerRestart(
+  app: ExtensionApp,
+  options: { clearDynamicRules: boolean },
+): Promise<{ restarted: Promise<void> }> {
+  const previous = app.worker;
+  if (options.clearDynamicRules) {
+    await previous.evaluate(async () => {
+      const rules = await chrome.declarativeNetRequest.getDynamicRules();
+      await chrome.declarativeNetRequest.updateDynamicRules({
+        removeRuleIds: rules.map((rule) => rule.id),
+      });
+    });
+  }
+  const controlPage = app.context.pages()[0] ?? await app.context.newPage();
+  const cdp = await app.context.newCDPSession(controlPage);
+  type Version = {
+    versionId: string;
+    scriptURL: string;
+    status: string;
+    runningStatus: string;
+  };
+  const waitForVersion = (predicate: (version: Version) => boolean): Promise<Version> =>
+    new Promise((resolve) => {
+      const listener = (event: { versions: Version[] }): void => {
+        const version = event.versions.find(predicate);
+        if (!version) return;
+        cdp.off('ServiceWorker.workerVersionUpdated', listener);
+        resolve(version);
+      };
+      cdp.on('ServiceWorker.workerVersionUpdated', listener);
+    });
+  const activated = waitForVersion((candidate) =>
+    candidate.scriptURL === previous.url() && candidate.status === 'activated',
+  );
+  await cdp.send('ServiceWorker.enable');
+  const version = await activated;
+  const stopped = waitForVersion((candidate) =>
+    candidate.versionId === version.versionId && candidate.runningStatus === 'stopped',
+  );
+  await cdp.send('ServiceWorker.stopWorker', { versionId: version.versionId });
+  await stopped;
+  const running = waitForVersion((candidate) =>
+    candidate.versionId === version.versionId && candidate.runningStatus === 'running',
+  ).then(async () => {
+    await cdp.detach();
+  });
+  return {
+    restarted: running,
+  };
+}

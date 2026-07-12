@@ -205,7 +205,7 @@ export function compileDynamicRules(
 
 export async function reconcileDynamicRules(
   settingsInput?: ExtensionSettings,
-): Promise<void> {
+): Promise<{ hadDynamicRules: boolean }> {
   const settings = settingsInput ?? await loadSettings();
   const next = compileDynamicRules(getEnabledRules(settings), settings.excludedHosts);
 
@@ -227,4 +227,5 @@ export async function reconcileDynamicRules(
     removeRuleIds: current.map((rule) => rule.id),
     addRules: next,
   });
+  return { hadDynamicRules: current.length > 0 };
 }

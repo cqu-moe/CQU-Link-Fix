@@ -30,8 +30,8 @@ import {
 } from '../src/background/navigation-state';
 import {
   CQU_OPTIONAL_ORIGINS,
-  loadSettingsSnapshot,
-  loadSettings,
+  loadCommittedSettingsSnapshot,
+  loadCommittedSettings,
   replaceSettingsAtRevision,
   SettingsApplyFailed,
   SettingsRevisionConflict,
@@ -41,6 +41,7 @@ import {
   acquireCustomPermissionLease,
   cleanupDeletedCustomRulePermissions,
   releaseCustomPermissionLease,
+  retryPendingCustomPermissionCleanup,
   renewCustomPermissionLease,
 } from '../src/background/custom-permission-leases';
 import { queueBackgroundOperation } from '../src/background/coordination';
@@ -48,16 +49,20 @@ import { queueBackgroundOperation } from '../src/background/coordination';
 const latestTopFrameNavigation = new Map<number, symbol>();
 const tabFinalizationQueues = new Map<number, Promise<void>>();
 let recordGeneration = 0;
-let startupReconciliation: Promise<void> = Promise.resolve();
+let startupReconciliation: Promise<boolean> = Promise.resolve(true);
 let startupReconciliationPending = false;
 
 const settingsMutationHooks = {
-  apply: reconcileDynamicRules,
+  apply: async (settings: Parameters<typeof reconcileDynamicRules>[0]) => {
+    await reconcileDynamicRules(settings);
+  },
   afterApply: cleanupDeletedCustomRulePermissions,
 };
 
 function scheduleReconciliation(label = 'Failed to reconcile dynamic DNR rules'): Promise<void> {
-  const operation = queueBackgroundOperation(() => reconcileDynamicRules());
+  const operation = queueBackgroundOperation(async () => {
+    await reconcileDynamicRules();
+  });
   void operation.catch((error: unknown) => console.error(label, error));
   return operation;
 }
@@ -140,7 +145,7 @@ async function rewriteTopFrameNavigation(
   details: Browser.webNavigation.WebNavigationBaseCallbackDetails,
   navigationToken: symbol,
   navigationSequence: number,
-  needsStartupFallback: boolean,
+  startedBeforeDnrReady: boolean,
 ): Promise<void> {
   if (details.frameId !== 0 || details.tabId < 0 || details.tabId > MAX_BYPASS_TAB_ID) return;
 
@@ -161,16 +166,13 @@ async function rewriteTopFrameNavigation(
 
   if (await isOriginalBypass(details.tabId, details.url)) return;
 
-  if (needsStartupFallback) {
-    try {
-      await startupReconciliation;
-    } catch {
-      // The fallback below still applies the pure registered transformation.
-    }
+  let needsStartupFallback = false;
+  if (startedBeforeDnrReady) {
+    needsStartupFallback = !await startupReconciliation;
     if (latestTopFrameNavigation.get(details.tabId) !== navigationToken) return;
   }
 
-  const settings = await loadSettings();
+  const settings = await loadCommittedSettings();
   const host = url.hostname.toLowerCase();
   if (isExcludedHost(host, settings.excludedHosts)) return;
 
@@ -268,7 +270,7 @@ async function dispatchBackgroundMessage(
     return { ok: true, revision: snapshot.revision };
   }
   if (message.type === 'get-settings-snapshot') {
-    return { ok: true, snapshot: await loadSettingsSnapshot() };
+    return { ok: true, snapshot: await loadCommittedSettingsSnapshot() };
   }
   if (message.type === 'reconcile-all-cqu-mode') {
     const snapshot = await updateSettingsSnapshot(async (current) => {
@@ -403,11 +405,18 @@ export default defineBackground(() => {
   latestTopFrameNavigation.clear();
   recordGeneration = 0;
   startupReconciliationPending = true;
-  startupReconciliation = scheduleReconciliation('Failed to reconcile dynamic DNR rules at startup')
-    .catch(() => undefined)
+  startupReconciliation = queueBackgroundOperation(() => reconcileDynamicRules())
+    .then((result) => result.hadDynamicRules)
+    .catch((error: unknown) => {
+      console.error('Failed to reconcile dynamic DNR rules at startup', error);
+      return false;
+    })
     .finally(() => {
       startupReconciliationPending = false;
     });
+  void startupReconciliation.then(() => retryPendingCustomPermissionCleanup()).catch(
+    (error: unknown) => console.error('Failed to retry custom permission cleanup at startup', error),
+  );
   browser.runtime.onInstalled.addListener(() => {
     void scheduleReconciliation('Failed to reconcile dynamic DNR rules after install');
   });
