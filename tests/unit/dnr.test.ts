@@ -7,6 +7,7 @@ import {
   compareRulePrecedence,
   compileDynamicRules,
   getRulePriority,
+  persistedDnrOwnsRewrite,
   reconcileDynamicRules,
 } from '../../src/rules/dnr';
 import { DEFAULT_SETTINGS, saveSettings } from '../../src/storage/settings';
@@ -393,6 +394,79 @@ describe('DNR compilation', () => {
     expect(() => compileDynamicRules([collidingRule], ['sso.cqu.edu.cn'])).toThrow(
       'Duplicate DNR rule ID: 80000',
     );
+  });
+});
+
+describe('persisted DNR compiler trust boundary', () => {
+  const input = 'https://sso.cqu.edu.cn/login?service=%2Fclient#form';
+  const target = 'https://sso-cqu-edu-cn-s.atrust.cqu.edu.cn/login?service=%2Fclient#form';
+
+  function ownership(
+    select: (compiled: Browser.declarativeNetRequest.Rule[]) =>
+      Browser.declarativeNetRequest.Rule[],
+  ): boolean {
+    const compiled = compileDynamicRules(BUILT_IN_RULES, []);
+    return persistedDnrOwnsRewrite(
+      select(structuredClone(compiled)),
+      compiled,
+      input,
+      BUILT_IN_RULES[0]!.dnrId,
+      target,
+    );
+  }
+
+  it('rejects an unknown XHR-only allow even when the relevant compiler rule is present', () => {
+    expect(ownership((compiled) => [
+      compiled.find((rule) => rule.id === BUILT_IN_RULES[0]!.dnrId)!,
+      {
+        id: 765_001,
+        priority: 200_000,
+        action: { type: 'allow' },
+        condition: {
+          regexFilter: '^https?://sso\\.cqu\\.edu\\.cn/.*$',
+          resourceTypes: ['xmlhttprequest'],
+        },
+      },
+    ])).toBe(false);
+  });
+
+  it('rejects an unknown higher-priority urlFilter rule', () => {
+    expect(ownership((compiled) => [
+      compiled.find((rule) => rule.id === BUILT_IN_RULES[0]!.dnrId)!,
+      {
+        id: 765_002,
+        priority: 200_000,
+        action: { type: 'allow' },
+        condition: { urlFilter: '||sso.cqu.edu.cn/', resourceTypes: ['main_frame'] },
+      },
+    ])).toBe(false);
+  });
+
+  it('rejects a stale same-ID substitution with the wrong fragment', () => {
+    expect(ownership((compiled) => compiled
+      .filter((rule) => rule.id === BUILT_IN_RULES[0]!.dnrId)
+      .map((rule) => ({
+        ...rule,
+        action: {
+          type: 'redirect' as const,
+          redirect: {
+            regexSubstitution:
+              'https://sso-cqu-edu-cn-s.atrust.cqu.edu.cn\\1#wrong',
+          },
+        },
+      })))).toBe(false);
+  });
+
+  it('trusts a partial compiler-owned set containing the exact relevant rule and fragment behavior', () => {
+    expect(ownership((compiled) =>
+      compiled.filter((rule) => rule.id === BUILT_IN_RULES[0]!.dnrId),
+    )).toBe(true);
+  });
+
+  it('rejects a partial compiler-owned set containing only an unrelated rule', () => {
+    expect(ownership((compiled) =>
+      compiled.filter((rule) => rule.id === BUILT_IN_RULES[1]!.dnrId),
+    )).toBe(false);
   });
 });
 

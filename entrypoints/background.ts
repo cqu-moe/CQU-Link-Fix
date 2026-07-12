@@ -23,6 +23,7 @@ import {
   compareRulePrecedence,
   persistedDnrOwnsRewrite,
   reconcileDynamicRules,
+  type DnrReconciliationEvidence,
 } from '../src/rules/dnr';
 import type { RuleDefinition } from '../src/rules/types';
 import { hasTopLevelCasTicket } from '../src/rules/transform';
@@ -53,8 +54,10 @@ import { queueBackgroundOperation } from '../src/background/coordination';
 const latestTopFrameNavigation = new Map<number, symbol>();
 const tabFinalizationQueues = new Map<number, Promise<void>>();
 let recordGeneration = 0;
-let startupReconciliation: Promise<Browser.declarativeNetRequest.Rule[] | null> =
-  Promise.resolve([]);
+let startupReconciliation: Promise<DnrReconciliationEvidence | null> = Promise.resolve({
+  previousDynamicRules: [],
+  compiledDynamicRules: [],
+});
 let startupReconciliationPending = false;
 
 const settingsMutationHooks = {
@@ -171,9 +174,9 @@ async function rewriteTopFrameNavigation(
 
   if (await isOriginalBypass(details.tabId, details.url)) return;
 
-  let previousDynamicRules: Browser.declarativeNetRequest.Rule[] | null = [];
+  let startupEvidence: DnrReconciliationEvidence | null = null;
   if (startedBeforeDnrReady) {
-    previousDynamicRules = await startupReconciliation;
+    startupEvidence = await startupReconciliation;
     if (latestTopFrameNavigation.get(details.tabId) !== navigationToken) return;
   }
 
@@ -189,8 +192,9 @@ async function rewriteTopFrameNavigation(
 
   if (decision && winningRule) {
     const needsStartupFallback = startedBeforeDnrReady &&
-      (previousDynamicRules === null || !persistedDnrOwnsRewrite(
-        previousDynamicRules,
+      (startupEvidence === null || !persistedDnrOwnsRewrite(
+        startupEvidence.previousDynamicRules,
+        startupEvidence.compiledDynamicRules,
         details.url,
         winningRule.dnrId,
         decision.targetUrl,
@@ -418,7 +422,6 @@ export default defineBackground(() => {
   recordGeneration = 0;
   startupReconciliationPending = true;
   startupReconciliation = queueBackgroundOperation(() => reconcileDynamicRules())
-    .then((result) => result.previousDynamicRules)
     .catch((error: unknown) => {
       console.error('Failed to reconcile dynamic DNR rules at startup', error);
       return null;

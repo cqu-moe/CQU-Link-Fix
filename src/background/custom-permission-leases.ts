@@ -53,19 +53,21 @@ async function removeExactOrigins(origins: readonly string[]): Promise<void> {
   if (stillGranted.some(Boolean)) throw new Error('Custom permission cleanup was not completed');
 }
 
-async function settlePendingCleanup(
-  candidates: readonly string[],
-  settings: ExtensionSettings,
-  activeLeases: readonly CustomPermissionLeaseRecord[],
-): Promise<void> {
+async function mergePendingCleanup(candidates: readonly string[]): Promise<string[]> {
   const pending = parseCustomPermissionCleanupOrigins([
     ...await loadPendingCleanupOrigins(),
     ...candidates,
   ]);
-  if (pending.length === 0) return;
+  if (candidates.length > 0) await writePendingCleanupOrigins(pending);
+  return pending;
+}
 
-  // Persist the debt before attempting a fallible permission API call.
-  await writePendingCleanupOrigins(pending);
+async function settleDurablePendingCleanup(
+  pending: readonly string[],
+  settings: ExtensionSettings,
+  activeLeases: readonly CustomPermissionLeaseRecord[],
+): Promise<void> {
+  if (pending.length === 0) return;
   const requiredOrigins = new Set(activeLeases.flatMap((lease) => lease.origins));
   for (const rule of settings.customRules) {
     if (rule.matcher.kind !== 'host') continue;
@@ -85,6 +87,15 @@ async function settlePendingCleanup(
     // the already-persisted superset makes the cleanup retryable and idempotent.
     console.error('Failed to clear completed custom permission cleanup debt', error);
   }
+}
+
+async function settlePendingCleanup(
+  candidates: readonly string[],
+  settings: ExtensionSettings,
+  activeLeases: readonly CustomPermissionLeaseRecord[],
+): Promise<void> {
+  const pending = await mergePendingCleanup(candidates);
+  await settleDurablePendingCleanup(pending, settings, activeLeases);
 }
 
 export async function cleanupDeletedCustomRulePermissions(
@@ -183,7 +194,8 @@ export async function releaseCustomPermissionLease(
     }
     const remaining = leases.filter((lease) => lease.nonce !== nonce);
     const settings = await loadSettings();
+    const pending = await mergePendingCleanup(cleanupOrigins);
     await writeLeases(remaining);
-    await settlePendingCleanup(cleanupOrigins, settings, remaining);
+    await settleDurablePendingCleanup(pending, settings, remaining);
   });
 }

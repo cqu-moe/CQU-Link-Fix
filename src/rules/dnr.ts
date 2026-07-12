@@ -203,74 +203,82 @@ export function compileDynamicRules(
   return compiled;
 }
 
-function requestUrl(input: string): string {
+function splitRequestUrl(input: string): { request: string; fragment: string } {
   const url = new URL(input);
+  const fragment = url.hash;
   url.hash = '';
-  return url.toString();
+  return { request: url.toString(), fragment };
 }
 
-function matchingRegexRedirectTarget(
+function stableStructure(value: unknown): string {
+  if (Array.isArray(value)) {
+    return `[${value.map(stableStructure).join(',')}]`;
+  }
+  if (value && typeof value === 'object') {
+    const entries = Object.entries(value).sort(([left], [right]) => left.localeCompare(right));
+    return `{${entries.map(([key, child]) =>
+      `${JSON.stringify(key)}:${stableStructure(child)}`).join(',')}}`;
+  }
+  return JSON.stringify(value) ?? 'undefined';
+}
+
+function matchingCompilerRule(
   rule: Browser.declarativeNetRequest.Rule,
   input: string,
-): string | null {
+): { matches: boolean; target: string | null } {
   const condition = rule.condition;
-  const supportedConditionKeys = new Set([
-    'isUrlFilterCaseSensitive',
-    'regexFilter',
-    'resourceTypes',
-  ]);
-  if (Object.keys(condition).some((key) => !supportedConditionKeys.has(key))) return null;
-  if (condition.resourceTypes && !condition.resourceTypes.includes('main_frame')) return null;
-  if (!condition.regexFilter || rule.action.type !== 'redirect') return null;
-  const substitution = rule.action.redirect?.regexSubstitution;
-  if (!substitution) return null;
+  if (!condition.regexFilter) return { matches: false, target: null };
+  const { request, fragment } = splitRequestUrl(input);
 
   let match: RegExpExecArray | null;
   try {
     match = new RegExp(
       condition.regexFilter,
       condition.isUrlFilterCaseSensitive ? '' : 'i',
-    ).exec(requestUrl(input));
+    ).exec(request);
   } catch {
-    return null;
+    return { matches: false, target: null };
   }
-  if (!match) return null;
-  return substitution.replace(/\\([0-9])/g, (_capture, index: string) =>
+  if (!match) return { matches: false, target: null };
+  if (rule.action.type !== 'redirect') return { matches: true, target: null };
+  const substitution = rule.action.redirect?.regexSubstitution;
+  if (!substitution) return { matches: false, target: null };
+  const substituted = substitution.replace(/\\([0-9])/g, (_capture, index: string) =>
     match?.[Number(index)] ?? '',
   );
+  try {
+    const target = new URL(substituted);
+    if (!target.hash && fragment) target.hash = fragment;
+    return { matches: true, target: target.toString() };
+  } catch {
+    return { matches: false, target: null };
+  }
 }
 
 export function persistedDnrOwnsRewrite(
-  rules: readonly Browser.declarativeNetRequest.Rule[],
+  previousRules: readonly Browser.declarativeNetRequest.Rule[],
+  compiledRules: readonly Browser.declarativeNetRequest.Rule[],
   input: string,
   expectedRuleId: number,
   expectedTarget: string,
 ): boolean {
+  const compiledShapes = new Set(compiledRules.map(stableStructure));
+  const previousIds = new Set<number>();
+  for (const rule of previousRules) {
+    if (!compiledShapes.has(stableStructure(rule)) || previousIds.has(rule.id)) return false;
+    previousIds.add(rule.id);
+  }
+
   const matching: Array<{
     rule: Browser.declarativeNetRequest.Rule;
     priority: number;
     target: string | null;
   }> = [];
-  for (const rule of rules) {
+  for (const rule of previousRules) {
     const priority = rule.priority;
     if (typeof priority !== 'number') continue;
-    const target = matchingRegexRedirectTarget(rule, input);
-    if (target) {
-      matching.push({ rule, priority, target });
-      continue;
-    }
-
-    const condition = rule.condition;
-    if (!condition.regexFilter || rule.action.type === 'redirect') continue;
-    try {
-      const regex = new RegExp(
-        condition.regexFilter,
-        condition.isUrlFilterCaseSensitive ? '' : 'i',
-      );
-      if (regex.test(requestUrl(input))) matching.push({ rule, priority, target: null });
-    } catch {
-      // Unknown stale rules are not trusted as ownership evidence.
-    }
+    const result = matchingCompilerRule(rule, input);
+    if (result.matches) matching.push({ rule, priority, target: result.target });
   }
   if (matching.length === 0) return false;
   const highestPriority = Math.max(...matching.map(({ priority }) => priority));
@@ -280,15 +288,20 @@ export function persistedDnrOwnsRewrite(
   try {
     return winner.rule.id === expectedRuleId &&
       winner.target !== null &&
-      requestUrl(winner.target) === requestUrl(expectedTarget);
+      new URL(winner.target).toString() === new URL(expectedTarget).toString();
   } catch {
     return false;
   }
 }
 
+export interface DnrReconciliationEvidence {
+  previousDynamicRules: Browser.declarativeNetRequest.Rule[];
+  compiledDynamicRules: Browser.declarativeNetRequest.Rule[];
+}
+
 export async function reconcileDynamicRules(
   settingsInput?: ExtensionSettings,
-): Promise<{ previousDynamicRules: Browser.declarativeNetRequest.Rule[] }> {
+): Promise<DnrReconciliationEvidence> {
   const settings = settingsInput ?? await loadSettings();
   const next = compileDynamicRules(getEnabledRules(settings), settings.excludedHosts);
 
@@ -310,5 +323,8 @@ export async function reconcileDynamicRules(
     removeRuleIds: current.map((rule) => rule.id),
     addRules: next,
   });
-  return { previousDynamicRules: structuredClone(current) };
+  return {
+    previousDynamicRules: structuredClone(current),
+    compiledDynamicRules: structuredClone(next),
+  };
 }

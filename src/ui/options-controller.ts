@@ -469,8 +469,8 @@ export async function initializeOptionsController(
         setStatus(requested
           ? '未授予全部 CQU 域名权限；全域模式保持关闭。'
           : '无法关闭全部 CQU 域名模式；通配域名权限仍然存在。', 'error');
-      } else if (!changed && requested) {
-        setStatus('未授予全部 CQU 域名权限；全域模式保持关闭。', 'error');
+      } else if (!changed) {
+        setStatus(`后台无法确认权限操作；已按重新读取的设置显示为${requested ? '已启用' : '已关闭'}。`, 'error');
       } else {
         setStatus(requested ? '全部 CQU 域名模式已启用' : '全部 CQU 域名模式已关闭', 'success');
       }

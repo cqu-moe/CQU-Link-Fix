@@ -298,6 +298,46 @@ describe('options controller', () => {
     expect(text('status')).not.toContain('已关闭');
   });
 
+  it('warns about an uncertain enable response while showing the authoritative enabled snapshot', async () => {
+    const enabled = snapshot({ ...DEFAULT_SETTINGS, enableAllCquDomains: true }, 4);
+    const deps = dependencies({
+      setAllCquMode: vi.fn().mockResolvedValue(false),
+      getSnapshot: vi.fn()
+        .mockResolvedValueOnce(snapshot())
+        .mockResolvedValueOnce(enabled),
+    });
+    await initializeOptionsController(document, deps);
+
+    checkbox('all-cqu-enabled').click();
+    await settle();
+
+    expect(checkbox('all-cqu-enabled').checked).toBe(true);
+    expect(text('status')).toContain('无法确认');
+    expect(text('status')).toContain('已启用');
+    expect(text('status')).not.toContain('保持关闭');
+    expect(document.querySelector('#status')?.getAttribute('data-tone')).toBe('error');
+  });
+
+  it('warns about an uncertain disable response while showing the authoritative disabled snapshot', async () => {
+    const enabled = snapshot({ ...DEFAULT_SETTINGS, enableAllCquDomains: true }, 3);
+    const disabled = snapshot(DEFAULT_SETTINGS, 4);
+    const deps = dependencies({
+      setAllCquMode: vi.fn().mockResolvedValue(false),
+      getSnapshot: vi.fn()
+        .mockResolvedValueOnce(enabled)
+        .mockResolvedValueOnce(disabled),
+    });
+    await initializeOptionsController(document, deps);
+
+    checkbox('all-cqu-enabled').click();
+    await settle();
+
+    expect(checkbox('all-cqu-enabled').checked).toBe(false);
+    expect(text('status')).toContain('无法确认');
+    expect(text('status')).toContain('已关闭');
+    expect(document.querySelector('#status')?.getAttribute('data-tone')).toBe('error');
+  });
+
   it('contains a synchronous all-CQU failure, reloads, and restores controls', async () => {
     const deps = dependencies({
       setAllCquMode: vi.fn(() => { throw new Error('permission API unavailable'); }),

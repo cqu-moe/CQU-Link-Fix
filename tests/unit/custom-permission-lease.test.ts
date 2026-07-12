@@ -161,6 +161,68 @@ describe('custom permission leases', () => {
     expect(remove).toHaveBeenCalledWith({ origins: [...LIBRARY_ORIGINS] });
   });
 
+  it('keeps the release nonce retryable when the first durable debt write fails', async () => {
+    const lease = await acquireCustomPermissionLease([...LIBRARY_ORIGINS], 1_000);
+    const originalSet = browser.storage.local.set.bind(browser.storage.local);
+    let failDebtWrite = true;
+    vi.spyOn(browser.storage.local, 'set').mockImplementation(async (items) => {
+      if (failDebtWrite && Object.hasOwn(items, 'customPermissionCleanupOrigins')) {
+        failDebtWrite = false;
+        throw new Error('durable debt unavailable');
+      }
+      await originalSet(items);
+    });
+    const remove = vi.spyOn(browser.permissions, 'remove').mockResolvedValue(true as never);
+
+    await expect(releaseCustomPermissionLease(lease.nonce, {
+      cleanupOrigins: [...LIBRARY_ORIGINS],
+      now: 1_001,
+    })).rejects.toThrow('durable debt');
+
+    expect((await browser.storage.session.get('customPermissionLeases'))
+      .customPermissionLeases).toEqual([expect.objectContaining({ nonce: lease.nonce })]);
+    expect(remove).not.toHaveBeenCalled();
+
+    await expect(releaseCustomPermissionLease(lease.nonce, {
+      cleanupOrigins: [...LIBRARY_ORIGINS],
+      now: 1_002,
+    })).resolves.toBeUndefined();
+    expect(remove).toHaveBeenCalledWith({ origins: [...LIBRARY_ORIGINS] });
+  });
+
+  it('retains durable debt and the retryable nonce when the lease write fails', async () => {
+    const lease = await acquireCustomPermissionLease([...LIBRARY_ORIGINS], 1_000);
+    const originalSet = browser.storage.session.set.bind(browser.storage.session);
+    let failLeaseWrite = true;
+    vi.spyOn(browser.storage.session, 'set').mockImplementation(async (items) => {
+      if (failLeaseWrite && Object.hasOwn(items, 'customPermissionLeases')) {
+        failLeaseWrite = false;
+        throw new Error('lease storage unavailable');
+      }
+      await originalSet(items);
+    });
+    const remove = vi.spyOn(browser.permissions, 'remove').mockResolvedValue(true as never);
+
+    await expect(releaseCustomPermissionLease(lease.nonce, {
+      cleanupOrigins: [...LIBRARY_ORIGINS],
+      now: 1_001,
+    })).rejects.toThrow('lease storage');
+
+    expect((await browser.storage.local.get('customPermissionCleanupOrigins'))
+      .customPermissionCleanupOrigins).toEqual(LIBRARY_ORIGINS);
+    expect((await browser.storage.session.get('customPermissionLeases'))
+      .customPermissionLeases).toEqual([expect.objectContaining({ nonce: lease.nonce })]);
+    expect(remove).not.toHaveBeenCalled();
+
+    await expect(releaseCustomPermissionLease(lease.nonce, {
+      cleanupOrigins: [...LIBRARY_ORIGINS],
+      now: 1_002,
+    })).resolves.toBeUndefined();
+    expect(remove).toHaveBeenCalledWith({ origins: [...LIBRARY_ORIGINS] });
+    expect((await browser.storage.local.get('customPermissionCleanupOrigins'))
+      .customPermissionCleanupOrigins).toEqual([]);
+  });
+
   it('persists deferred cleanup debt across a full session reset and retries it', async () => {
     const previous = {
       ...DEFAULT_SETTINGS,
