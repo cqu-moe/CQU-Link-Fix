@@ -4,7 +4,11 @@ import {
   isRewriteRecord,
   type RewriteRecord,
 } from '../rewrite-record';
-import { buildPopupModel, type PopupModel } from './popup-model';
+import {
+  buildPopupModel,
+  type PopupModel,
+  type PopupRuntimeState,
+} from './popup-model';
 
 interface PopupTab {
   id?: number | undefined;
@@ -16,9 +20,14 @@ export interface PopupControllerDependencies {
   sendMessage: (message: BackgroundMessage) => Promise<unknown>;
   openOptionsPage: () => Promise<void>;
   closePopup: () => void;
+  getSettingsSnapshot: () => Promise<{
+    settings: { enabled: boolean };
+    revision: number;
+  } | null>;
 }
 
 interface PopupElements {
+  runtimeStatus: HTMLElement;
   status: HTMLElement;
   route: HTMLElement;
   rule: HTMLElement;
@@ -40,6 +49,7 @@ function requireElement<T extends Element>(
 
 function getElements(root: Document): PopupElements {
   return {
+    runtimeStatus: requireElement(root, '#runtime-status', HTMLElement),
     status: requireElement(root, '#status', HTMLElement),
     route: requireElement(root, '#route', HTMLElement),
     rule: requireElement(root, '#rule', HTMLElement),
@@ -86,8 +96,8 @@ function isSafeTabId(value: unknown): value is number {
   return Number.isInteger(value) && (value as number) >= 0 && (value as number) <= MAX_REWRITE_TAB_ID;
 }
 
-function initialModel(): PopupModel {
-  return buildPopupModel(undefined, null);
+function initialModel(runtimeState: PopupRuntimeState = 'unavailable'): PopupModel {
+  return buildPopupModel(undefined, null, runtimeState);
 }
 
 export async function initializePopupController(
@@ -98,6 +108,7 @@ export async function initializePopupController(
   let tabId: number | null = null;
   let tabUrl: string | null = null;
   let model = initialModel();
+  let runtimeState: PopupRuntimeState = 'unavailable';
   let pending = false;
   let excluded = false;
 
@@ -111,6 +122,7 @@ export async function initializePopupController(
   };
 
   const renderModel = (): void => {
+    elements.runtimeStatus.textContent = model.runtimeLabel;
     elements.status.textContent = model.status;
     elements.route.textContent = model.originalHost === model.targetHost
       ? model.originalHost
@@ -181,10 +193,22 @@ export async function initializePopupController(
   });
 
   elements.status.textContent = '正在读取当前页面…';
+  elements.runtimeStatus.textContent = '正在读取扩展状态…';
   elements.route.textContent = '—';
   elements.rule.textContent = '规则：读取中';
   elements.feedback.textContent = '';
   renderControls();
+
+  try {
+    const snapshot = await dependencies.getSettingsSnapshot();
+    runtimeState = snapshot === null
+      ? 'unavailable'
+      : snapshot.settings.enabled ? 'enabled' : 'disabled';
+  } catch {
+    runtimeState = 'unavailable';
+  }
+  model = initialModel(runtimeState);
+  elements.runtimeStatus.textContent = model.runtimeLabel;
 
   let tabs: readonly PopupTab[];
   try {
@@ -208,7 +232,7 @@ export async function initializePopupController(
 
   tabId = tab.id;
   tabUrl = tab.url;
-  model = buildPopupModel(tabUrl, null);
+  model = buildPopupModel(tabUrl, null, runtimeState);
   if (!model.canExclude) {
     renderModel();
     return;
@@ -234,6 +258,6 @@ export async function initializePopupController(
     return;
   }
 
-  model = buildPopupModel(tabUrl, response.state);
+  model = buildPopupModel(tabUrl, response.state, runtimeState);
   renderModel();
 }

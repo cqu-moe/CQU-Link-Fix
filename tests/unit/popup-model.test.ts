@@ -16,6 +16,18 @@ function rewriteRecord(overrides: Partial<RewriteRecord> = {}): RewriteRecord {
 }
 
 describe('popup model', () => {
+  it.each([
+    ['enabled', '扩展运行中'],
+    ['disabled', '扩展已停用'],
+    ['unavailable', '扩展后台不可用'],
+  ] as const)('exposes the %s runtime state separately from rewrite status', (state, label) => {
+    expect(buildPopupModel('https://example.com/', null, state)).toMatchObject({
+      runtimeState: state,
+      runtimeLabel: label,
+      status: '当前页面未改写',
+    });
+  });
+
   it('explains a recorded rewrite whose target matches the current request URL', () => {
     expect(buildPopupModel(
       'https://sso-cqu-edu-cn-s.atrust.cqu.edu.cn/login#finished',
@@ -84,6 +96,8 @@ describe('popup model', () => {
     'is total and non-actionable for a missing, invalid, or restricted URL: %s',
     (tabUrl) => {
       expect(buildPopupModel(tabUrl, rewriteRecord())).toEqual({
+        runtimeState: 'enabled',
+        runtimeLabel: '扩展运行中',
         status: '此页面不支持链接改写',
         originalHost: '—',
         targetHost: '—',

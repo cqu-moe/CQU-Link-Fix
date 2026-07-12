@@ -22,6 +22,7 @@ function rewriteRecord(overrides: Partial<RewriteRecord> = {}): RewriteRecord {
 function renderFixture(): void {
   document.body.innerHTML = `
     <main>
+      <p id="runtime-status"></p>
       <section id="status"></section>
       <p id="route"></p>
       <p id="rule"></p>
@@ -54,6 +55,10 @@ function dependencies(
     sendMessage: vi.fn().mockResolvedValue({ ok: true, state: rewriteRecord() }),
     openOptionsPage: vi.fn().mockResolvedValue(undefined),
     closePopup: vi.fn(),
+    getSettingsSnapshot: vi.fn().mockResolvedValue({
+      settings: { enabled: true },
+      revision: 0,
+    }),
     ...overrides,
   };
 }
@@ -71,11 +76,35 @@ describe('popup controller', () => {
     await initializePopupController(document, deps);
 
     expect(deps.queryActiveTabs).toHaveBeenCalledOnce();
+    expect(deps.getSettingsSnapshot).toHaveBeenCalledOnce();
+    expect(text('runtime-status')).toBe('扩展运行中');
     expect(deps.sendMessage).toHaveBeenCalledWith({ type: 'get-tab-state', tabId: 7 });
     expect(text('status')).toBe('已通过 aTrust 打开');
     expect(text('route')).toContain('sso.cqu.edu.cn');
     expect(button('open-original').disabled).toBe(false);
     expect(button('exclude-host').disabled).toBe(false);
+  });
+
+  it('distinguishes a disabled extension from an enabled unmatched page', async () => {
+    await initializePopupController(document, dependencies({
+      queryActiveTabs: vi.fn().mockResolvedValue([{ id: 7, url: 'https://example.com/' }]),
+      getSettingsSnapshot: vi.fn().mockResolvedValue({
+        settings: { enabled: false },
+        revision: 3,
+      }),
+      sendMessage: vi.fn().mockResolvedValue({ ok: true, state: null }),
+    }));
+
+    expect(text('runtime-status')).toBe('扩展已停用');
+    expect(text('status')).toBe('当前页面未改写');
+  });
+
+  it('reports an unavailable background snapshot explicitly', async () => {
+    await initializePopupController(document, dependencies({
+      getSettingsSnapshot: vi.fn().mockResolvedValue(null),
+    }));
+
+    expect(text('runtime-status')).toBe('扩展后台不可用');
   });
 
   it.each([

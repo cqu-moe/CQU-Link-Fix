@@ -1,4 +1,5 @@
 import './style.css';
+import { getSettingsSnapshotViaBackground } from '../../src/storage/settings';
 import { initializePopupController } from '../../src/ui/popup-controller';
 
 let started = false;
@@ -18,6 +19,7 @@ function startPopup(): void {
     sendMessage: (message) => browser.runtime.sendMessage(message),
     openOptionsPage: () => browser.runtime.openOptionsPage(),
     closePopup: () => window.close(),
+    getSettingsSnapshot: getSettingsSnapshotViaBackground,
   }).catch(showStartupFailure);
 }
 

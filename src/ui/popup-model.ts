@@ -5,6 +5,8 @@ import {
 } from '../rewrite-record';
 
 export interface PopupModel {
+  runtimeState: PopupRuntimeState;
+  runtimeLabel: string;
   status: string;
   originalHost: string;
   targetHost: string;
@@ -14,7 +16,22 @@ export interface PopupModel {
   error: string | null;
 }
 
-const UNSUPPORTED_MODEL: PopupModel = {
+export type PopupRuntimeState = 'enabled' | 'disabled' | 'unavailable';
+
+const RUNTIME_LABELS = {
+  enabled: '扩展运行中',
+  disabled: '扩展已停用',
+  unavailable: '扩展后台不可用',
+} satisfies Record<PopupRuntimeState, string>;
+
+function runtimeFields(runtimeState: PopupRuntimeState): Pick<
+  PopupModel,
+  'runtimeState' | 'runtimeLabel'
+> {
+  return { runtimeState, runtimeLabel: RUNTIME_LABELS[runtimeState] };
+}
+
+const UNSUPPORTED_MODEL: Omit<PopupModel, 'runtimeState' | 'runtimeLabel'> = {
   status: '此页面不支持链接改写',
   originalHost: '—',
   targetHost: '—',
@@ -27,11 +44,13 @@ const UNSUPPORTED_MODEL: PopupModel = {
 export function buildPopupModel(
   tabUrl: string | null | undefined,
   record: RewriteRecord | null | undefined,
+  runtimeState: PopupRuntimeState = 'enabled',
 ): PopupModel {
   const current = parseSafeHttpUrl(tabUrl);
-  if (!current) return { ...UNSUPPORTED_MODEL };
+  if (!current) return { ...runtimeFields(runtimeState), ...UNSUPPORTED_MODEL };
 
   const unchanged: PopupModel = {
+    ...runtimeFields(runtimeState),
     status: '当前页面未改写',
     originalHost: current.hostname,
     targetHost: current.hostname,
@@ -56,6 +75,7 @@ export function buildPopupModel(
     ? record.error
     : null;
   return {
+    ...runtimeFields(runtimeState),
     status: record.ruleId === 'addon-youth-public'
       ? error ? '团委公网页面加载失败' : '已转换为团委公网链接'
       : error ? 'aTrust 页面加载失败' : '已通过 aTrust 打开',
