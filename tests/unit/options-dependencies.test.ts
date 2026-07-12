@@ -29,6 +29,15 @@ describe('settings UI dependency boundary', () => {
     expect(source).not.toMatch(/custom:\s*boolean/);
   });
 
+  it('keeps rendering and custom permission workflow outside the state controller', async () => {
+    const source = await readFile(resolve(process.cwd(), 'src/ui/options-controller.ts'), 'utf8');
+
+    expect(source).toMatch(/from '\.\/options-renderer'/);
+    expect(source).toMatch(/from '\.\/options-custom-rules'/);
+    expect(source).not.toMatch(/createElement\(['"]article['"]\)/);
+    expect(source).not.toMatch(/function startCustomPermissionLeaseHeartbeat/);
+  });
+
   it('carries exact custom permission origins as a tuple contract', async () => {
     const source = await readFile(resolve(process.cwd(), 'src/ui/custom-rule.ts'), 'utf8');
 

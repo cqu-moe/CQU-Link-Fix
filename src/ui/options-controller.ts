@@ -1,36 +1,27 @@
-import type { CustomRule, RuleDefinition } from '../rules/types';
+import type { RuleDefinition } from '../rules/types';
 import { validateSettingsSnapshot } from '../storage/settings-codec';
 import type {
   EditableSettings,
-  ExtensionSettings,
   ReplaceSettingsResult,
   SettingsSnapshot,
 } from '../storage/settings-types';
-import {
-  customRulePermissions,
-  parseCustomRule,
-  selectNextCustomDnrId,
-  type ExactOriginPermission,
-} from './custom-rule';
-import {
-  buildOptionsModel,
-  toEditableSettings,
-  type OptionsRuleModel,
-} from './options-model';
-import {
-  CUSTOM_PERMISSION_LEASE_RENEW_INTERVAL_MS,
-  type CustomPermissionLeaseHandle,
-} from '../custom-permission-lease';
 import type { DnrReconciliationStatus, RuleValidationError } from '../rules/dnr-status';
-import { matcherRangeLabel } from '../rules/matcher';
+import { selectNextCustomDnrId } from './custom-rule';
+import { toEditableSettings, type OptionsRuleModel } from './options-model';
+import {
+  beginCustomRuleAddition,
+  type CustomRulePermissionDependencies,
+} from './options-custom-rules';
+import {
+  getOptionsElements,
+  renderOptionsContent,
+  renderOptionsControls,
+  type OptionsRenderHandlers,
+} from './options-renderer';
 
 export type { ExactOriginPermission } from './custom-rule';
 
-interface OriginPermission {
-  origins: string[];
-}
-
-export interface OptionsControllerDependencies {
+export interface OptionsControllerDependencies extends CustomRulePermissionDependencies {
   builtInRules: readonly RuleDefinition[];
   getSnapshot: () => Promise<SettingsSnapshot | null>;
   replaceSettings: (
@@ -38,121 +29,17 @@ export interface OptionsControllerDependencies {
     expectedRevision: number,
   ) => Promise<ReplaceSettingsResult>;
   setAllCquMode: (enabled: boolean) => Promise<boolean>;
-  containsPermission: (permission: OriginPermission) => Promise<boolean>;
-  requestPermission: (permission: ExactOriginPermission) => Promise<boolean>;
-  acquirePermissionLease: (
-    permission: ExactOriginPermission,
-  ) => Promise<CustomPermissionLeaseHandle | null>;
-  renewPermissionLease: (
-    nonce: string,
-    permission: ExactOriginPermission,
-  ) => Promise<boolean>;
-  releasePermissionLease: (
-    nonce: string,
-    cleanupOrigins?: readonly string[],
-  ) => Promise<boolean>;
   getDnrStatus: () => Promise<DnrReconciliationStatus | null>;
 }
 
-interface OptionsElements {
-  master: HTMLInputElement;
-  allCqu: HTMLInputElement;
-  groups: HTMLElement;
-  customForm: HTMLFormElement;
-  customHost: HTMLInputElement;
-  customSubmit: HTMLButtonElement;
-  customList: HTMLElement;
-  excludedList: HTMLElement;
-  status: HTMLElement;
-  customError: HTMLElement;
-}
-
 type CommitOutcome = 'success' | 'conflict' | 'failure';
+
 interface CommitResult {
   outcome: CommitOutcome;
   snapshotAfterFailure?: SettingsSnapshot | null;
 }
 
-type RenderableRule = OptionsRuleModel;
-
-interface CustomPermissionLeaseHeartbeat {
-  stop: () => Promise<boolean>;
-}
-
-function startCustomPermissionLeaseHeartbeat(
-  nonce: string,
-  permission: ExactOriginPermission,
-  renew: OptionsControllerDependencies['renewPermissionLease'],
-): CustomPermissionLeaseHeartbeat {
-  let stopped = false;
-  let ownershipCertain = true;
-  let renewal: Promise<void> | null = null;
-  let timer: ReturnType<typeof setInterval> | null = null;
-
-  const stopTimer = (): void => {
-    stopped = true;
-    if (timer !== null) {
-      clearInterval(timer);
-      timer = null;
-    }
-  };
-  const runRenewal = (): Promise<void> => {
-    if (stopped || renewal !== null) return Promise.resolve();
-    renewal = (async () => {
-      try {
-        if (!await renew(nonce, permission)) {
-          ownershipCertain = false;
-          stopTimer();
-        }
-      } catch {
-        ownershipCertain = false;
-        stopTimer();
-      }
-    })().finally(() => {
-      renewal = null;
-    });
-    return renewal;
-  };
-
-  timer = setInterval(() => {
-    void runRenewal();
-  }, CUSTOM_PERMISSION_LEASE_RENEW_INTERVAL_MS);
-
-  return {
-    stop: async () => {
-      stopTimer();
-      if (renewal) await renewal;
-      return ownershipCertain;
-    },
-  };
-}
-
 const initializedScopes = new WeakSet<Element>();
-
-function requireElement<T extends Element>(
-  root: Document,
-  selector: string,
-  constructor: { new (...args: never[]): T },
-): T {
-  const element = root.querySelector(selector);
-  if (!(element instanceof constructor)) throw new Error(`Missing options element: ${selector}`);
-  return element;
-}
-
-function getElements(root: Document): OptionsElements {
-  return {
-    master: requireElement(root, '#master-enabled', HTMLInputElement),
-    allCqu: requireElement(root, '#all-cqu-enabled', HTMLInputElement),
-    groups: requireElement(root, '#built-in-groups', HTMLElement),
-    customForm: requireElement(root, '#custom-rule-form', HTMLFormElement),
-    customHost: requireElement(root, '#custom-host', HTMLInputElement),
-    customSubmit: requireElement(root, '#custom-submit', HTMLButtonElement),
-    customList: requireElement(root, '#custom-list', HTMLElement),
-    excludedList: requireElement(root, '#excluded-list', HTMLElement),
-    status: requireElement(root, '#status', HTMLElement),
-    customError: requireElement(root, '#custom-error', HTMLElement),
-  };
-}
 
 function cloneSnapshot(value: unknown): SettingsSnapshot | null {
   try {
@@ -179,17 +66,6 @@ function isReplaceResult(
     typeof candidate.error === 'string' && Boolean(candidate.error.trim());
 }
 
-function checkboxId(prefix: string, value: string): string {
-  return `${prefix}-${value.replace(/[^a-zA-Z0-9_-]/g, '-')}`;
-}
-
-function appendEmptyState(root: Document, container: HTMLElement, text: string): void {
-  const empty = root.createElement('p');
-  empty.className = 'empty-state';
-  empty.textContent = text;
-  container.append(empty);
-}
-
 export async function initializeOptionsController(
   root: Document,
   dependencies: OptionsControllerDependencies,
@@ -199,25 +75,21 @@ export async function initializeOptionsController(
   if (initializedScopes.has(scope)) return;
   initializedScopes.add(scope);
 
-  const elements = getElements(root);
+  const elements = getOptionsElements(root);
   let saved: SettingsSnapshot | null = null;
   let validationErrors: RuleValidationError[] = [];
   let pending = false;
 
-  const setStatus = (message: string, tone: 'neutral' | 'success' | 'error' = 'neutral'): void => {
+  const setStatus = (
+    message: string,
+    tone: 'neutral' | 'success' | 'error' = 'neutral',
+  ): void => {
     elements.status.textContent = message;
     elements.status.dataset.tone = tone;
   };
 
   const renderControls = (): void => {
-    const disabled = pending || saved === null;
-    for (const control of scope.querySelectorAll('button, input')) {
-      if (control instanceof HTMLButtonElement || control instanceof HTMLInputElement) {
-        const locked = control instanceof HTMLInputElement && control.dataset.locked === 'true';
-        control.disabled = disabled || locked;
-        control.setAttribute('aria-busy', String(pending));
-      }
-    }
+    renderOptionsControls(scope, pending, saved !== null);
   };
 
   const reloadSavedSnapshot = async (): Promise<SettingsSnapshot | null> => {
@@ -309,152 +181,41 @@ export async function initializeOptionsController(
       });
   };
 
-  const renderRuleToggle = (
-    rule: RenderableRule,
-  ): HTMLInputElement => {
-    const isCustom = rule.category === 'custom';
-    const input = root.createElement('input');
-    input.type = 'checkbox';
-    input.id = checkboxId(isCustom ? 'custom-enabled' : 'built-in-enabled', rule.id);
-    input.checked = rule.enabled;
-    if (isCustom) input.dataset.customRuleId = rule.id;
-    else input.dataset.ruleId = rule.id;
-    if (rule.locked) {
-      const reason = rule.lockReason ?? '此规则当前不可更改。';
-      input.dataset.locked = 'true';
-      input.disabled = true;
-      input.title = reason;
-      input.setAttribute('aria-disabled', 'true');
-      input.setAttribute('aria-label', `${rule.name}：${reason}`);
-      return input;
-    }
-    input.setAttribute('aria-label', `${rule.enabled ? '停用' : '启用'}${rule.name}`);
-    input.addEventListener('change', () => {
+  const handlers: OptionsRenderHandlers = {
+    toggleRule: (rule: OptionsRuleModel, enabled: boolean) => {
       runEditable((current) => {
         const disabled = new Set(current.disabledRuleIds);
-        if (input.checked) disabled.delete(rule.id);
+        if (enabled) disabled.delete(rule.id);
         else disabled.add(rule.id);
         return { ...current, disabledRuleIds: [...disabled].sort() };
-      }, `已${input.checked ? '启用' : '停用'} ${rule.name}`);
-    });
-    return input;
-  };
-
-  const renderRuleCard = (
-    rule: RenderableRule,
-  ): HTMLElement => {
-    const isCustom = rule.category === 'custom';
-    const article = root.createElement('article');
-    article.className = 'rule-card';
-    const header = root.createElement('div');
-    header.className = 'rule-card__header';
-    const label = root.createElement('label');
-    const input = renderRuleToggle(rule);
-    label.htmlFor = input.id;
-    label.textContent = rule.name;
-    header.append(label, input);
-    const description = root.createElement('p');
-    description.textContent = rule.description;
-    const range = root.createElement('code');
-    range.textContent = matcherRangeLabel(rule.matcher);
-    article.append(header, description, range);
-    if (rule.validationError) {
-      const validationError = root.createElement('p');
-      validationError.className = 'rule-validation-error';
-      validationError.dataset.ruleValidationErrorFor = rule.id;
-      validationError.textContent = `规则未加载：${rule.validationError}`;
-      article.append(validationError);
-    }
-    if (rule.locked && rule.lockReason) {
-      const lockReason = root.createElement('p');
-      lockReason.id = checkboxId('rule-lock-reason', rule.id);
-      lockReason.className = 'rule-lock-reason';
-      lockReason.dataset.lockReasonFor = rule.id;
-      lockReason.textContent = rule.lockReason;
-      input.setAttribute('aria-describedby', lockReason.id);
-      article.append(lockReason);
-    }
-    if (isCustom) {
-      const remove = root.createElement('button');
-      remove.type = 'button';
-      remove.className = 'danger-button';
-      remove.dataset.deleteCustom = rule.id;
-      remove.textContent = '删除规则';
-      remove.setAttribute('aria-label', `删除自定义规则 ${rule.name}`);
-      remove.addEventListener('click', () => runEditable((current) => ({
+      }, `已${enabled ? '启用' : '停用'} ${rule.name}`);
+    },
+    deleteCustomRule: (rule: OptionsRuleModel) => {
+      runEditable((current) => ({
         ...current,
         customRules: current.customRules.filter((item) => item.id !== rule.id),
         disabledRuleIds: current.disabledRuleIds.filter((id) => id !== rule.id),
-      }), `已删除 ${rule.name}`));
-      article.append(remove);
-    }
-    return article;
+      }), `已删除 ${rule.name}`);
+    },
+    removeExcludedHost: (host: string) => {
+      runEditable((current) => ({
+        ...current,
+        excludedHosts: current.excludedHosts.filter((item) => item !== host),
+      }), `已从排除名单移除 ${host}`);
+    },
   };
 
   const render = (): void => {
-    if (!saved) {
-      elements.master.checked = false;
-      elements.allCqu.checked = false;
-      elements.groups.replaceChildren();
-      elements.customList.replaceChildren();
-      elements.excludedList.replaceChildren();
-      renderControls();
-      return;
-    }
-    elements.master.checked = saved.settings.enabled;
-    elements.allCqu.checked = saved.settings.enableAllCquDomains;
-
-    const model = buildOptionsModel(
-      saved.settings,
+    renderOptionsContent(
+      root,
+      elements,
+      scope,
+      saved,
       dependencies.builtInRules,
       validationErrors,
+      pending,
+      handlers,
     );
-    const groupNodes = model.groups.map((group) => {
-      const fieldset = root.createElement('fieldset');
-      fieldset.dataset.ruleGroup = group.category;
-      const legend = root.createElement('legend');
-      legend.textContent = group.label;
-      const description = root.createElement('p');
-      description.className = 'group-description';
-      description.textContent = group.description;
-      fieldset.append(legend, description);
-      if (group.rules.length === 0) appendEmptyState(root, fieldset, '当前版本暂无此类内置规则。');
-      else for (const rule of group.rules) fieldset.append(renderRuleCard(rule));
-      return fieldset;
-    });
-    elements.groups.replaceChildren(...groupNodes);
-
-    const disabled = new Set(saved.settings.disabledRuleIds);
-    const customNodes = saved.settings.customRules.map((rule): RenderableRule => ({
-      ...rule,
-      enabled: !disabled.has(rule.id),
-      locked: false,
-      lockReason: null,
-      validationError: validationErrors.find((error) => error.ruleId === rule.id)?.message ?? null,
-    })).map(renderRuleCard);
-    elements.customList.replaceChildren(...customNodes);
-    if (customNodes.length === 0) appendEmptyState(root, elements.customList, '尚未添加本地精确规则。');
-
-    const excludedNodes = saved.settings.excludedHosts.map((host) => {
-      const row = root.createElement('div');
-      row.className = 'excluded-row';
-      const value = root.createElement('code');
-      value.textContent = host;
-      const remove = root.createElement('button');
-      remove.type = 'button';
-      remove.dataset.removeExcluded = host;
-      remove.textContent = '恢复改写';
-      remove.setAttribute('aria-label', `从排除名单移除 ${host}`);
-      remove.addEventListener('click', () => runEditable((current) => ({
-        ...current,
-        excludedHosts: current.excludedHosts.filter((item) => item !== host),
-      }), `已从排除名单移除 ${host}`));
-      row.append(value, remove);
-      return row;
-    });
-    elements.excludedList.replaceChildren(...excludedNodes);
-    if (excludedNodes.length === 0) appendEmptyState(root, elements.excludedList, '没有暂停的站点。');
-    renderControls();
   };
 
   elements.master.addEventListener('change', () => {
@@ -518,118 +279,36 @@ export async function initializeOptionsController(
       return;
     }
 
-    let rule: CustomRule;
-    let permission: ExactOriginPermission;
-    try {
-      rule = parseCustomRule(elements.customHost.value, nextDnrId, saved.settings.customRules);
-      permission = customRulePermissions(rule);
-    } catch (error) {
-      elements.customError.textContent = error instanceof Error ? error.message : '自定义规则无效';
+    const addition = beginCustomRuleAddition(
+      elements.customHost.value,
+      nextDnrId,
+      saved.settings.customRules,
+      dependencies,
+      async (rule) => {
+        if (!saved) return 'failure';
+        const result = await commit({
+          ...toEditableSettings(saved.settings),
+          customRules: [...saved.settings.customRules, rule],
+        }, `已添加 ${rule.name}`);
+        return result.outcome;
+      },
+    );
+    if (!addition.started) {
+      elements.customError.textContent = addition.error;
       return;
     }
 
     pending = true;
     renderControls();
-    // Start permission acquisition directly in the submit gesture, before CAS work.
-    const containmentOperation = Promise.allSettled(permission.origins.map((origin) => {
-      try {
-        return dependencies.containsPermission({ origins: [origin] });
-      } catch (error) {
-        return Promise.reject(error);
-      }
-    }));
-    let leaseOperation: Promise<CustomPermissionLeaseHandle | null>;
-    try {
-      leaseOperation = dependencies.acquirePermissionLease(permission);
-    } catch {
-      leaseOperation = Promise.resolve(null);
-    }
-    let requestOperation: Promise<boolean>;
-    try {
-      requestOperation = dependencies.requestPermission(permission);
-    } catch {
-      requestOperation = Promise.resolve(false);
-    }
-    void (async () => {
-      let heartbeat: CustomPermissionLeaseHeartbeat | null = null;
-      try {
-        let lease: CustomPermissionLeaseHandle | null = null;
-        try { lease = await leaseOperation; } catch { lease = null; }
-        if (!lease) {
-          try { await requestOperation; } catch { /* The grant state is uncertain; retain it. */ }
-          elements.customError.textContent = '无法建立权限协调租约；规则未保存，访问权限已保留。';
-          return;
-        }
-        heartbeat = startCustomPermissionLeaseHeartbeat(
-          lease.nonce,
-          permission,
-          dependencies.renewPermissionLease,
-        );
-
-        let granted = false;
-        try { granted = await requestOperation; } catch { granted = false; }
-        if (!granted) {
-          await heartbeat.stop();
-          try { await dependencies.releasePermissionLease(lease.nonce); } catch { /* TTL cleanup remains. */ }
-          elements.customError.textContent = '未授予该域名的访问权限，规则未保存。';
-          return;
-        }
-        const containment = await containmentOperation;
-        const canProveOwnership = containment.every((result) => result.status === 'fulfilled');
-        const newlyAcquiredOrigins = canProveOwnership
-          ? permission.origins.filter((_, index) =>
-            containment[index]!.status === 'fulfilled' && !containment[index]!.value,
-          )
-          : null;
-
-        let grantStillPresent = false;
-        try { grantStillPresent = await dependencies.containsPermission(permission); } catch { grantStillPresent = false; }
-        if (!grantStillPresent) {
-          await heartbeat.stop();
-          try { await dependencies.releasePermissionLease(lease.nonce); } catch { /* TTL cleanup remains. */ }
-          elements.customError.textContent = '权限状态已变化，规则未保存；请重新添加。';
-          return;
-        }
-
-        const result = await commit({
-          ...toEditableSettings(saved!.settings),
-          customRules: [...saved!.settings.customRules, rule],
-        }, `已添加 ${rule.name}`);
-        if (result.outcome === 'success') {
-          elements.customHost.value = '';
-          await heartbeat.stop();
-          try { await dependencies.releasePermissionLease(lease.nonce); } catch { /* TTL cleanup remains. */ }
-          return;
-        }
-        elements.customError.textContent = result.outcome === 'conflict'
-          ? '设置已更新，请重新填写并添加该规则。'
-          : '规则未保存。';
-        const leaseOwnershipCertain = await heartbeat.stop();
-        if (newlyAcquiredOrigins === null || !leaseOwnershipCertain) {
-          try { await dependencies.releasePermissionLease(lease.nonce); } catch { /* TTL cleanup remains. */ }
-          elements.customError.textContent = '规则未保存，且无法安全确认权限归属；已保留访问权限。';
-          return;
-        }
-        let released = false;
-        try {
-          released = await dependencies.releasePermissionLease(
-            lease.nonce,
-            newlyAcquiredOrigins,
-          );
-        } catch {
-          released = false;
-        }
-        if (!released) {
-          elements.customError.textContent = '规则未保存，且后台无法完成权限清理；已保留访问权限。';
-        }
-      } catch {
-        elements.customError.textContent = '权限处理未完成；规则未保存，访问权限已保留。';
-      } finally {
-        if (heartbeat) await heartbeat.stop();
+    void addition.completion
+      .then((result) => {
+        if (result.clearInput) elements.customHost.value = '';
+        elements.customError.textContent = result.error ?? '';
+      })
+      .finally(() => {
         pending = false;
         render();
-      }
-    })();
+      });
   });
 
   elements.master.checked = false;
