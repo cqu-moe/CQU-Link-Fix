@@ -2,17 +2,32 @@ import {
   CUSTOM_PERMISSION_LEASE_TTL_MS,
   customPermissionOriginsForHost,
   isCustomPermissionLeaseNonce,
+  isStrictCustomPermissionOrigin,
   parseCustomPermissionCleanupOrigins,
   parseCustomPermissionLeaseRecord,
   parseCustomPermissionOriginPair,
   type CustomPermissionLeaseRecord,
   type CustomPermissionLeaseReleaseOptions,
 } from '../custom-permission-lease';
-import { loadSettings, type ExtensionSettings } from '../storage/settings';
+import { BUILT_IN_RULES } from '../rules/builtins';
+import {
+  CQU_OPTIONAL_ORIGINS,
+  loadSettings,
+  type ExtensionSettings,
+} from '../storage/settings';
 import { queueBackgroundOperation } from './coordination';
 
 const LEASES_KEY = 'customPermissionLeases';
 const PENDING_CLEANUP_KEY = 'customPermissionCleanupOrigins';
+const BUILT_IN_PERMISSION_ORIGINS = parseCustomPermissionCleanupOrigins(
+  BUILT_IN_RULES.flatMap((rule) => {
+    if (rule.matcher.kind === 'host-port') return [];
+    if (rule.transformer === 'atrust-domain') {
+      return customPermissionOriginsForHost(rule.matcher.host);
+    }
+    return [`*://${rule.matcher.host}/*`];
+  }),
+);
 
 async function loadActiveLeases(now: number): Promise<CustomPermissionLeaseRecord[]> {
   const stored = await browser.storage.session.get(LEASES_KEY);
@@ -62,19 +77,46 @@ async function mergePendingCleanup(candidates: readonly string[]): Promise<strin
   return pending;
 }
 
-async function settleDurablePendingCleanup(
-  pending: readonly string[],
+function requiredPermissionOrigins(
   settings: ExtensionSettings,
   activeLeases: readonly CustomPermissionLeaseRecord[],
-): Promise<void> {
-  if (pending.length === 0) return;
-  const requiredOrigins = new Set(activeLeases.flatMap((lease) => lease.origins));
+): Set<string> {
+  const requiredOrigins = new Set([
+    ...BUILT_IN_PERMISSION_ORIGINS,
+    ...activeLeases.flatMap((lease) => lease.origins),
+  ]);
+  if (settings.enableAllCquDomains) {
+    for (const origin of CQU_OPTIONAL_ORIGINS.origins) requiredOrigins.add(origin);
+  }
   for (const rule of settings.customRules) {
     if (rule.matcher.kind !== 'host') continue;
     for (const origin of customPermissionOriginsForHost(rule.matcher.host)) {
       requiredOrigins.add(origin);
     }
   }
+  return requiredOrigins;
+}
+
+async function reconstructCleanupCandidates(
+  settings: ExtensionSettings,
+  activeLeases: readonly CustomPermissionLeaseRecord[],
+): Promise<string[]> {
+  const granted = await browser.permissions.getAll();
+  const requiredOrigins = requiredPermissionOrigins(settings, activeLeases);
+  return parseCustomPermissionCleanupOrigins(
+    (granted.origins ?? []).filter((origin) =>
+      isStrictCustomPermissionOrigin(origin) && !requiredOrigins.has(origin),
+    ),
+  );
+}
+
+async function settleDurablePendingCleanup(
+  pending: readonly string[],
+  settings: ExtensionSettings,
+  activeLeases: readonly CustomPermissionLeaseRecord[],
+): Promise<void> {
+  if (pending.length === 0) return;
+  const requiredOrigins = requiredPermissionOrigins(settings, activeLeases);
   const removableOrigins = pending.filter((origin) => !requiredOrigins.has(origin));
   if (removableOrigins.length === 0) return;
   await removeExactOrigins(removableOrigins);
@@ -119,7 +161,13 @@ export function retryPendingCustomPermissionCleanup(now = Date.now()): Promise<v
   return queueBackgroundOperation(async () => {
     const settings = await loadSettings();
     const activeLeases = await loadActiveLeases(now);
-    await settlePendingCleanup([], settings, activeLeases);
+    let reconstructed: string[] = [];
+    try {
+      reconstructed = await reconstructCleanupCandidates(settings, activeLeases);
+    } catch (error) {
+      console.warn('Could not reconstruct custom permission cleanup debt', error);
+    }
+    await settlePendingCleanup(reconstructed, settings, activeLeases);
   });
 }
 

@@ -12,6 +12,8 @@ import {
   type RewriteRecord,
 } from '../../src/background/session';
 import {
+  acquireCustomPermissionLease,
+  releaseCustomPermissionLease,
   retryPendingCustomPermissionCleanup,
 } from '../../src/background/custom-permission-leases';
 import {
@@ -1498,6 +1500,123 @@ describe('background session lifecycle, errors, and messages', () => {
     await vi.waitFor(() => expect(remove).toHaveBeenCalledWith({ origins }));
     expect((await browser.storage.local.get('customPermissionCleanupOrigins'))
       .customPermissionCleanupOrigins).toEqual([]);
+  });
+
+  it('reconstructs and removes an orphan grant after debt persistence fails and the client disappears', async () => {
+    const libraryOrigins = [
+      '*://library.cqu.edu.cn/*',
+      'https://library-cqu-edu-cn-s.atrust.cqu.edu.cn/*',
+    ];
+    const newsOrigins = [
+      '*://news.cqu.edu.cn/*',
+      'https://news-cqu-edu-cn-s.atrust.cqu.edu.cn/*',
+    ];
+    const liveOrigins = [
+      '*://live.cqu.edu.cn/*',
+      'https://live-cqu-edu-cn-s.atrust.cqu.edu.cn/*',
+    ];
+    const newsRule = {
+      id: 'news-rule', dnrId: 10_002, name: 'news.cqu.edu.cn', description: 'custom',
+      category: 'custom' as const, defaultEnabled: true,
+      matcher: { kind: 'host' as const, host: 'news.cqu.edu.cn' },
+      transformer: 'atrust-domain' as const,
+    };
+    await saveSettings({
+      ...DEFAULT_SETTINGS,
+      enableAllCquDomains: true,
+      customRules: [newsRule],
+    });
+    const now = vi.spyOn(Date, 'now').mockReturnValue(50_000);
+    const abandoned = await acquireCustomPermissionLease(libraryOrigins, 50_000);
+    const originalLocalSet = browser.storage.local.set.bind(browser.storage.local);
+    let failDebtWrite = true;
+    vi.spyOn(browser.storage.local, 'set').mockImplementation(async (items) => {
+      if (failDebtWrite && Object.hasOwn(items, 'customPermissionCleanupOrigins')) {
+        failDebtWrite = false;
+        throw new Error('durable debt unavailable');
+      }
+      await originalLocalSet(items);
+    });
+
+    await expect(releaseCustomPermissionLease(abandoned.nonce, {
+      cleanupOrigins: libraryOrigins,
+      now: 50_001,
+    })).rejects.toThrow('durable debt');
+    expect((await browser.storage.local.get('customPermissionCleanupOrigins'))
+      .customPermissionCleanupOrigins).toBeUndefined();
+
+    await browser.storage.session.clear();
+    now.mockReturnValue(50_002);
+    const live = await acquireCustomPermissionLease(liveOrigins, 50_002);
+    vi.spyOn(browser.permissions, 'getAll').mockResolvedValue({
+      permissions: [],
+      origins: [
+        ...libraryOrigins,
+        ...newsOrigins,
+        ...liveOrigins,
+        '*://sso.cqu.edu.cn/*',
+        '*://youth.cqu.edu.cn/*',
+        'https://sso-cqu-edu-cn-s.atrust.cqu.edu.cn/*',
+        '*://cqu.edu.cn/*',
+        '*://*.cqu.edu.cn/*',
+        '<all_urls>',
+        'https://example.com/*',
+      ],
+    } as never);
+    const remove = vi.spyOn(browser.permissions, 'remove').mockResolvedValue(true as never);
+
+    await startBackground();
+
+    await vi.waitFor(() => expect(remove).toHaveBeenCalledWith({ origins: libraryOrigins }));
+    expect(remove).toHaveBeenCalledOnce();
+    expect((await browser.storage.local.get('customPermissionCleanupOrigins'))
+      .customPermissionCleanupOrigins).toEqual([]);
+    expect((await browser.storage.session.get('customPermissionLeases'))
+      .customPermissionLeases).toEqual([expect.objectContaining({ nonce: live.nonce })]);
+  });
+
+  it('does not reconstruct debt from required, broad, persisted, or actively leased origins', async () => {
+    const newsOrigins = [
+      '*://news.cqu.edu.cn/*',
+      'https://news-cqu-edu-cn-s.atrust.cqu.edu.cn/*',
+    ];
+    const liveOrigins = [
+      '*://live.cqu.edu.cn/*',
+      'https://live-cqu-edu-cn-s.atrust.cqu.edu.cn/*',
+    ];
+    await saveSettings({
+      ...DEFAULT_SETTINGS,
+      enableAllCquDomains: true,
+      customRules: [{
+        id: 'news-rule', dnrId: 10_002, name: 'news.cqu.edu.cn', description: 'custom',
+        category: 'custom' as const, defaultEnabled: true,
+        matcher: { kind: 'host' as const, host: 'news.cqu.edu.cn' },
+        transformer: 'atrust-domain' as const,
+      }],
+    });
+    await acquireCustomPermissionLease(liveOrigins);
+    vi.spyOn(browser.permissions, 'getAll').mockResolvedValue({
+      permissions: [],
+      origins: [
+        ...newsOrigins,
+        ...liveOrigins,
+        '*://sso.cqu.edu.cn/*',
+        '*://youth.cqu.edu.cn/*',
+        'https://sso-cqu-edu-cn-s.atrust.cqu.edu.cn/*',
+        '*://cqu.edu.cn/*',
+        '*://*.cqu.edu.cn/*',
+        '<all_urls>',
+      ],
+    } as never);
+    const remove = vi.spyOn(browser.permissions, 'remove').mockResolvedValue(true as never);
+
+    await startBackground();
+    await vi.waitFor(() => expect(browser.permissions.getAll).toHaveBeenCalledOnce());
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(remove).not.toHaveBeenCalled();
+    expect((await browser.storage.local.get('customPermissionCleanupOrigins'))
+      .customPermissionCleanupOrigins).toBeUndefined();
   });
 });
 
