@@ -1,6 +1,10 @@
 import type { Browser } from 'wxt/browser';
 import { loadSettings, type ExtensionSettings } from '../storage/settings';
 import { getEnabledRules } from './registry';
+import {
+  recordDnrReconciliationStatus,
+  type RuleValidationError,
+} from './dnr-status';
 import type { RuleDefinition } from './types';
 
 const ALLOW_ID_START = 80_000;
@@ -171,7 +175,7 @@ function compileTicketAllow(): Browser.declarativeNetRequest.Rule {
   };
 }
 
-function assertUniqueRuleIds(rules: readonly Browser.declarativeNetRequest.Rule[]): void {
+function assertUniqueRuleIds(rules: readonly { id: number }[]): void {
   const ids = new Set<number>();
   for (const rule of rules) {
     if (!Number.isInteger(rule.id) || rule.id < 1 || rule.id > MAX_RULE_ID) {
@@ -182,10 +186,15 @@ function assertUniqueRuleIds(rules: readonly Browser.declarativeNetRequest.Rule[
   }
 }
 
-export function compileDynamicRules(
+interface DynamicRuleCompilationPlan {
+  globalRules: Browser.declarativeNetRequest.Rule[];
+  priorities: Map<RuleDefinition, number>;
+}
+
+function planDynamicRuleCompilation(
   rules: readonly RuleDefinition[],
   excludedHosts: readonly string[],
-): Browser.declarativeNetRequest.Rule[] {
+): DynamicRuleCompilationPlan {
   const priorityCapacity = MAX_REDIRECT_PRIORITY - MIN_REDIRECT_PRIORITY + 1;
   if (rules.length > priorityCapacity) {
     throw new Error(`Redirect rule count exceeds unique priority capacity: ${rules.length}`);
@@ -194,10 +203,21 @@ export function compileDynamicRules(
   const priorities = new Map(
     ordered.map((rule, index) => [rule, MAX_REDIRECT_PRIORITY - index]),
   );
+  const globalRules = [...compileAllows(excludedHosts), compileTicketAllow()];
+  assertUniqueRuleIds(globalRules);
+  return { globalRules, priorities };
+}
+
+export function compileDynamicRules(
+  rules: readonly RuleDefinition[],
+  excludedHosts: readonly string[],
+): Browser.declarativeNetRequest.Rule[] {
+  const { globalRules, priorities } = planDynamicRuleCompilation(rules, excludedHosts);
+  const [ticketAllow] = globalRules.slice(-1);
   const compiled = [
-    ...compileAllows(excludedHosts),
+    ...globalRules.slice(0, -1),
     ...rules.flatMap((rule) => compileRedirects(rule, priorities.get(rule)!)),
-    compileTicketAllow(),
+    ticketAllow!,
   ];
   assertUniqueRuleIds(compiled);
   return compiled;
@@ -297,34 +317,95 @@ export function persistedDnrOwnsRewrite(
 export interface DnrReconciliationEvidence {
   previousDynamicRules: Browser.declarativeNetRequest.Rule[];
   compiledDynamicRules: Browser.declarativeNetRequest.Rule[];
+  validationErrors: RuleValidationError[];
+}
+
+async function regexValidationError(
+  rule: Browser.declarativeNetRequest.Rule,
+): Promise<string | null> {
+  const regex = rule.condition.regexFilter;
+  if (!regex) return null;
+  const result = await browser.declarativeNetRequest.isRegexSupported({
+    regex,
+    isCaseSensitive: rule.condition.isUrlFilterCaseSensitive ?? false,
+    requireCapturing: rule.action.redirect?.regexSubstitution !== undefined,
+  });
+  return result.isSupported
+    ? null
+    : `Unsupported regex in DNR rule ${rule.id}: ${result.reason ?? 'unknown'}`;
+}
+
+function compilationErrorMessage(error: unknown): string {
+  return error instanceof Error && error.message
+    ? error.message
+    : 'Unknown DNR compilation error';
 }
 
 export async function reconcileDynamicRules(
   settingsInput?: ExtensionSettings,
 ): Promise<DnrReconciliationEvidence> {
   const settings = settingsInput ?? await loadSettings();
-  const next = compileDynamicRules(getEnabledRules(settings), settings.excludedHosts);
-
-  for (const rule of next) {
-    const regex = rule.condition.regexFilter;
-    if (!regex) continue;
-    const result = await browser.declarativeNetRequest.isRegexSupported({
-      regex,
-      isCaseSensitive: rule.condition.isUrlFilterCaseSensitive ?? false,
-      requireCapturing: rule.action.redirect?.regexSubstitution !== undefined,
-    });
-    if (!result.isSupported) {
-      throw new Error(`Unsupported regex in DNR rule ${rule.id}: ${result.reason ?? 'unknown'}`);
+  const enabledRules = getEnabledRules(settings);
+  const { globalRules, priorities } = planDynamicRuleCompilation(
+    enabledRules,
+    settings.excludedHosts,
+  );
+  const validationErrors: RuleValidationError[] = [];
+  const candidates: Array<{
+    definition: RuleDefinition;
+    redirects: Browser.declarativeNetRequest.Rule[];
+  }> = [];
+  for (const definition of enabledRules) {
+    try {
+      const redirects = compileRedirects(definition, priorities.get(definition)!);
+      assertUniqueRuleIds(redirects);
+      candidates.push({ definition, redirects });
+    } catch (error) {
+      validationErrors.push({
+        ruleId: definition.id,
+        message: compilationErrorMessage(error),
+      });
     }
   }
+
+  for (const rule of globalRules) {
+    const error = await regexValidationError(rule);
+    if (error) throw new Error(error);
+  }
+
+  const validRedirects: Browser.declarativeNetRequest.Rule[] = [];
+  for (const candidate of candidates) {
+    let candidateError: string | null = null;
+    for (const redirect of candidate.redirects) {
+      candidateError = await regexValidationError(redirect);
+      if (candidateError) break;
+    }
+    if (candidateError) {
+      validationErrors.push({
+        ruleId: candidate.definition.id,
+        message: candidateError,
+      });
+    } else {
+      validRedirects.push(...candidate.redirects);
+    }
+  }
+
+  const next = [
+    ...globalRules.slice(0, -1),
+    ...validRedirects,
+    globalRules.at(-1)!,
+  ];
+  assertUniqueRuleIds(next);
 
   const current = await browser.declarativeNetRequest.getDynamicRules();
   await browser.declarativeNetRequest.updateDynamicRules({
     removeRuleIds: current.map((rule) => rule.id),
     addRules: next,
   });
+  recordDnrReconciliationStatus({ errors: validationErrors });
   return {
     previousDynamicRules: structuredClone(current),
     compiledDynamicRules: structuredClone(next),
+    validationErrors: structuredClone(validationErrors),
   };
 }

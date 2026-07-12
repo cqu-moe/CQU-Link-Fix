@@ -730,25 +730,20 @@ export function compileDynamicRules(
 
 export async function reconcileDynamicRules(): Promise<void> {
   const settings = await loadSettings();
-  const next = compileDynamicRules(getEnabledRules(settings), settings.excludedHosts);
-  for (const rule of next) {
-    const regex = rule.condition.regexFilter;
-    if (!regex) continue;
-    const result = await browser.declarativeNetRequest.isRegexSupported({
-      regex,
-      isCaseSensitive: false,
-    });
-    if (!result.isSupported) {
-      throw new Error(`Unsupported regex in DNR rule ${rule.id}: ${result.reason ?? 'unknown'}`);
-    }
-  }
+  const { validRules, validationErrors } = await compileAndValidateRulesIndividually(
+    getEnabledRules(settings),
+    settings.excludedHosts,
+  );
   const current = await browser.declarativeNetRequest.getDynamicRules();
   await browser.declarativeNetRequest.updateDynamicRules({
     removeRuleIds: current.map((rule) => rule.id),
-    addRules: next,
+    addRules: validRules,
   });
+  recordDnrReconciliationStatus({ errors: validationErrors });
 }
 ```
+
+Individual redirect compile/regex failures are skipped and attributed to their stable rule ID so Options can mark the rule without blocking unrelated redirects. Duplicate IDs, invalid global exclusion/ticket safety rules, and atomic `updateDynamicRules` failures remain global errors.
 
 - [ ] **Step 4: Add manifest permissions and background reconciliation**
 

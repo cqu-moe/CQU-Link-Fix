@@ -10,6 +10,7 @@ import {
   parseCustomPermissionOriginPair,
   type CustomPermissionOriginPair,
 } from './custom-permission-lease';
+import type { DnrReconciliationStatus } from './rules/dnr-status';
 
 export const MAX_MESSAGE_TAB_ID = MAX_REWRITE_TAB_ID;
 
@@ -18,6 +19,7 @@ export type BackgroundMessage =
   | { type: 'open-original-once'; tabId: number }
   | { type: 'exclude-current-host'; tabId: number }
   | { type: 'get-settings-snapshot' }
+  | { type: 'get-dnr-status' }
   | { type: 'replace-settings'; settings: EditableSettings; expectedRevision: number }
   | { type: 'reconcile-all-cqu-mode'; requested: boolean }
   | { type: 'acquire-custom-permission-lease'; origins: CustomPermissionOriginPair }
@@ -34,6 +36,7 @@ export type BackgroundResponse =
   | { ok: true; revision: number }
   | { ok: true; revision: number; enabled: boolean }
   | { ok: true; snapshot: SettingsSnapshot }
+  | { ok: true; dnrStatus: DnrReconciliationStatus }
   | { ok: true; leaseNonce: string }
   | { ok: true; leaseExpiresAt: number }
   | {
@@ -45,7 +48,10 @@ export type BackgroundResponse =
 export function isBackgroundMessage(value: unknown): value is BackgroundMessage {
   if (!value || typeof value !== 'object') return false;
   const candidate = value as Record<string, unknown>;
-  if (candidate.type === 'get-settings-snapshot') return Object.keys(candidate).length === 1;
+  if (
+    candidate.type === 'get-settings-snapshot' ||
+    candidate.type === 'get-dnr-status'
+  ) return Object.keys(candidate).length === 1;
   if (candidate.type === 'reconcile-all-cqu-mode') {
     return Object.keys(candidate).length === 2 && typeof candidate.requested === 'boolean';
   }

@@ -68,6 +68,7 @@ function dependencies(
     acquirePermissionLease: vi.fn().mockResolvedValue({ nonce: crypto.randomUUID() }),
     renewPermissionLease: vi.fn().mockResolvedValue(true),
     releasePermissionLease: vi.fn().mockResolvedValue(true),
+    getDnrStatus: vi.fn().mockResolvedValue({ errors: [] }),
     ...overrides,
   };
 }
@@ -102,10 +103,23 @@ describe('options controller', () => {
     await initializeOptionsController(document, deps);
 
     expect(deps.getSnapshot).toHaveBeenCalledOnce();
+    expect(deps.getDnrStatus).toHaveBeenCalledOnce();
     expect(checkbox('master-enabled').checked).toBe(true);
     expect(document.querySelectorAll('[data-rule-id]').length).toBe(BUILT_IN_RULES.length);
     expect(document.querySelectorAll('[data-rule-group]').length).toBe(4);
     expect(text('status')).toContain('设置已加载');
+  });
+
+  it('marks a rule that background reconciliation skipped', async () => {
+    await initializeOptionsController(document, dependencies({
+      getDnrStatus: vi.fn().mockResolvedValue({
+        errors: [{ ruleId: 'core-sso', message: 'syntaxError' }],
+      }),
+    }));
+
+    const error = document.querySelector('[data-rule-validation-error-for="core-sso"]');
+    expect(error?.textContent).toContain('syntaxError');
+    expect(error?.textContent).toContain('未加载');
   });
 
   it('renders a default-off built-in as a locked accessible control that pending state cannot unlock', async () => {

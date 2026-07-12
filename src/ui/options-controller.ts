@@ -21,6 +21,7 @@ import {
   CUSTOM_PERMISSION_LEASE_RENEW_INTERVAL_MS,
   type CustomPermissionLeaseHandle,
 } from '../custom-permission-lease';
+import type { DnrReconciliationStatus, RuleValidationError } from '../rules/dnr-status';
 
 export type { ExactOriginPermission } from './custom-rule';
 
@@ -49,6 +50,7 @@ export interface OptionsControllerDependencies {
     nonce: string,
     cleanupOrigins?: readonly string[],
   ) => Promise<boolean>;
+  getDnrStatus: () => Promise<DnrReconciliationStatus | null>;
 }
 
 interface OptionsElements {
@@ -198,6 +200,7 @@ export async function initializeOptionsController(
 
   const elements = getElements(root);
   let saved: SettingsSnapshot | null = null;
+  let validationErrors: RuleValidationError[] = [];
   let pending = false;
 
   const setStatus = (message: string, tone: 'neutral' | 'success' | 'error' = 'neutral'): void => {
@@ -225,6 +228,16 @@ export async function initializeOptionsController(
     }
     if (fresh) saved = fresh;
     return fresh;
+  };
+
+  const reloadDnrStatus = async (): Promise<void> => {
+    let status: DnrReconciliationStatus | null = null;
+    try {
+      status = await dependencies.getDnrStatus();
+    } catch {
+      status = null;
+    }
+    validationErrors = status ? structuredClone(status.errors) : [];
   };
 
   const commit = async (
@@ -255,6 +268,7 @@ export async function initializeOptionsController(
         },
         revision: response.revision,
       };
+      await reloadDnrStatus();
       setStatus(successMessage, 'success');
       return { outcome: 'success' };
     }
@@ -345,6 +359,13 @@ export async function initializeOptionsController(
       ? `${rule.matcher.host}:${rule.matcher.port}`
       : rule.matcher.host;
     article.append(header, description, range);
+    if (rule.validationError) {
+      const validationError = root.createElement('p');
+      validationError.className = 'rule-validation-error';
+      validationError.dataset.ruleValidationErrorFor = rule.id;
+      validationError.textContent = `规则未加载：${rule.validationError}`;
+      article.append(validationError);
+    }
     if (rule.locked && rule.lockReason) {
       const lockReason = root.createElement('p');
       lockReason.id = checkboxId('rule-lock-reason', rule.id);
@@ -384,7 +405,11 @@ export async function initializeOptionsController(
     elements.master.checked = saved.settings.enabled;
     elements.allCqu.checked = saved.settings.enableAllCquDomains;
 
-    const model = buildOptionsModel(saved.settings, dependencies.builtInRules);
+    const model = buildOptionsModel(
+      saved.settings,
+      dependencies.builtInRules,
+      validationErrors,
+    );
     const groupNodes = model.groups.map((group) => {
       const fieldset = root.createElement('fieldset');
       fieldset.dataset.ruleGroup = group.category;
@@ -406,6 +431,7 @@ export async function initializeOptionsController(
       enabled: !disabled.has(rule.id),
       locked: false,
       lockReason: null,
+      validationError: validationErrors.find((error) => error.ruleId === rule.id)?.message ?? null,
     })).map(renderRuleCard);
     elements.customList.replaceChildren(...customNodes);
     if (customNodes.length === 0) appendEmptyState(root, elements.customList, '尚未添加本地精确规则。');
@@ -624,6 +650,7 @@ export async function initializeOptionsController(
     return;
   }
   saved = initial;
+  await reloadDnrStatus();
   setStatus(`设置已加载（版本 ${saved.revision}）`, 'success');
   render();
 }

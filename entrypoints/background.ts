@@ -25,6 +25,7 @@ import {
   reconcileDynamicRules,
   type DnrReconciliationEvidence,
 } from '../src/rules/dnr';
+import { getDnrReconciliationStatus } from '../src/rules/dnr-status';
 import type { RuleDefinition } from '../src/rules/types';
 import { hasTopLevelCasTicket } from '../src/rules/transform';
 import {
@@ -57,6 +58,7 @@ let recordGeneration = 0;
 let startupReconciliation: Promise<DnrReconciliationEvidence | null> = Promise.resolve({
   previousDynamicRules: [],
   compiledDynamicRules: [],
+  validationErrors: [],
 });
 let startupReconciliationPending = false;
 
@@ -287,6 +289,9 @@ async function dispatchBackgroundMessage(
   }
   if (message.type === 'get-settings-snapshot') {
     return { ok: true, snapshot: await loadCommittedSettingsSnapshot() };
+  }
+  if (message.type === 'get-dnr-status') {
+    return { ok: true, dnrStatus: getDnrReconciliationStatus() };
   }
   if (message.type === 'reconcile-all-cqu-mode') {
     const snapshot = await updateSettingsSnapshot(async (current) => {

@@ -491,18 +491,54 @@ describe('DNR reconciliation', () => {
     expect(updateDynamicRules).toHaveBeenCalledWith({ removeRuleIds: [999], addRules: expected });
   });
 
-  it('rejects an unsupported regex without changing installed rules', async () => {
+  it('skips one unsupported redirect while installing unrelated rules', async () => {
     await saveSettings(DEFAULT_SETTINGS);
-    mockRegexSupport().mockResolvedValue({
-      isSupported: false,
-      reason: 'syntaxError',
-    });
-    const getDynamicRules = mockGetDynamicRules();
-    const updateDynamicRules = mockUpdateDynamicRules();
+    mockRegexSupport().mockImplementation(async ({ regex }) =>
+      regex.includes('sso\\.cqu\\.edu\\.cn')
+        ? { isSupported: false, reason: 'syntaxError' }
+        : { isSupported: true },
+    );
+    mockGetDynamicRules().mockResolvedValue([
+      { id: 999, priority: 1, action: { type: 'allow' }, condition: {} },
+    ]);
+    const updateDynamicRules = mockUpdateDynamicRules().mockResolvedValue();
 
-    await expect(reconcileDynamicRules()).rejects.toThrow('Unsupported regex in DNR rule 1001');
-    expect(getDynamicRules).not.toHaveBeenCalled();
-    expect(updateDynamicRules).not.toHaveBeenCalled();
+    const evidence = await reconcileDynamicRules();
+
+    expect(evidence.validationErrors).toEqual([{
+      ruleId: 'core-sso',
+      message: expect.stringContaining('syntaxError'),
+    }]);
+    const installed = updateDynamicRules.mock.calls[0]![0].addRules ?? [];
+    expect(installed.map((rule) => rule.id)).not.toContain(BUILT_IN_RULES[0]!.dnrId);
+    expect(installed.map((rule) => rule.id)).toEqual(expect.arrayContaining([
+      BUILT_IN_RULES[1]!.dnrId,
+      999_999_999,
+    ]));
+  });
+
+  it('skips one rule that fails compilation while preserving valid rules', async () => {
+    const invalid = createIpRule(8000, '999.1.1.1');
+    mockRegexSupport().mockResolvedValue({ isSupported: true });
+    mockGetDynamicRules().mockResolvedValue([]);
+    const updateDynamicRules = mockUpdateDynamicRules().mockResolvedValue();
+
+    const evidence = await reconcileDynamicRules({
+      ...DEFAULT_SETTINGS,
+      customRules: [invalid],
+    });
+
+    expect(evidence.validationErrors).toEqual([{
+      ruleId: invalid.id,
+      message: expect.stringContaining('canonical IPv4'),
+    }]);
+    const installed = updateDynamicRules.mock.calls[0]![0].addRules ?? [];
+    expect(installed.map((rule) => rule.id)).toEqual(expect.arrayContaining([
+      BUILT_IN_RULES[0]!.dnrId,
+      BUILT_IN_RULES[1]!.dnrId,
+      999_999_999,
+    ]));
+    expect(installed.map((rule) => rule.id)).not.toContain(invalid.dnrId);
   });
 });
 
@@ -532,6 +568,28 @@ describe('background reconciliation hooks', () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(updateDynamicRules).toHaveBeenCalledTimes(2);
     expect(isRegexSupported).toHaveBeenCalled();
+  });
+
+  it('exposes the latest per-rule validation status to trusted extension pages', async () => {
+    mockRegexSupport().mockImplementation(async ({ regex }) =>
+      regex.includes('sso\\.cqu\\.edu\\.cn')
+        ? { isSupported: false, reason: 'syntaxError' }
+        : { isSupported: true },
+    );
+    mockGetDynamicRules().mockResolvedValue([]);
+    const updateDynamicRules = mockUpdateDynamicRules().mockResolvedValue();
+    background.main!();
+    await vi.waitFor(() => expect(updateDynamicRules).toHaveBeenCalled());
+
+    await expect(fakeBrowser.runtime.onMessage.trigger(
+      { type: 'get-dnr-status' },
+      { id: browser.runtime.id, url: browser.runtime.getURL('/options.html') },
+    )).resolves.toEqual([{
+      ok: true,
+      dnrStatus: {
+        errors: [{ ruleId: 'core-sso', message: expect.stringContaining('syntaxError') }],
+      },
+    }]);
   });
 
   it('contains rejected startup and event reconciliations', async () => {

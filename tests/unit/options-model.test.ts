@@ -24,6 +24,22 @@ describe('options model', () => {
     expect(model.groups[0]!.rules[0]).toMatchObject({ id: 'core-sso', enabled: false });
   });
 
+  it('attaches validation errors to their stable rule IDs', () => {
+    const model = buildOptionsModel(DEFAULT_SETTINGS, BUILT_IN_RULES, [{
+      ruleId: 'core-sso',
+      message: 'Chromium 不支持该规则正则',
+    }]);
+
+    expect(model.groups[0]!.rules[0]).toMatchObject({
+      id: 'core-sso',
+      validationError: 'Chromium 不支持该规则正则',
+    });
+    expect(model.groups[3]!.rules[0]).toMatchObject({
+      id: 'addon-youth-public',
+      validationError: null,
+    });
+  });
+
   it('keeps a default-disabled built-in disabled without an override', () => {
     const defaultDisabled = { ...BUILT_IN_RULES[0]!, id: 'default-disabled', defaultEnabled: false };
 

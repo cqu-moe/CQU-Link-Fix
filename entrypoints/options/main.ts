@@ -6,6 +6,7 @@ import {
   setAllCquMode,
 } from '../../src/storage/settings';
 import { initializeOptionsController } from '../../src/ui/options-controller';
+import { getDnrStatusViaBackground } from '../../src/ui/dnr-status-client';
 import {
   acquireCustomPermissionLeaseViaBackground,
   releaseCustomPermissionLeaseViaBackground,
@@ -32,6 +33,7 @@ function startOptions(): void {
     acquirePermissionLease: acquireCustomPermissionLeaseViaBackground,
     renewPermissionLease: renewCustomPermissionLeaseViaBackground,
     releasePermissionLease: releaseCustomPermissionLeaseViaBackground,
+    getDnrStatus: getDnrStatusViaBackground,
   }).catch(showStartupFailure);
 }
 

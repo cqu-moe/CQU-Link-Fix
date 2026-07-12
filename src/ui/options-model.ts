@@ -1,4 +1,5 @@
 import type { RuleCategory, RuleDefinition } from '../rules/types';
+import type { RuleValidationError } from '../rules/dnr-status';
 import type { EditableSettings, ExtensionSettings } from '../storage/settings';
 
 const GROUPS: readonly {
@@ -16,6 +17,7 @@ export interface OptionsRuleModel extends RuleDefinition {
   enabled: boolean;
   locked: boolean;
   lockReason: string | null;
+  validationError: string | null;
 }
 
 export interface OptionsGroupModel {
@@ -32,8 +34,12 @@ export interface OptionsModel {
 export function buildOptionsModel(
   settings: ExtensionSettings,
   builtInRules: readonly RuleDefinition[],
+  validationErrors: readonly RuleValidationError[] = [],
 ): OptionsModel {
   const disabled = new Set(settings.disabledRuleIds);
+  const validationByRuleId = new Map(
+    validationErrors.map((error) => [error.ruleId, error.message]),
+  );
   return {
     groups: GROUPS.map((group) => ({
       ...group,
@@ -46,6 +52,7 @@ export function buildOptionsModel(
           lockReason: rule.defaultEnabled
             ? null
             : '此内置规则由当前版本默认关闭，暂不支持手动启用。',
+          validationError: validationByRuleId.get(rule.id) ?? null,
         })),
     })),
   };
