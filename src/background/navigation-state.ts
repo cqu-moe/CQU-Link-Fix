@@ -1,15 +1,11 @@
+import { createSerialQueue } from '../serial-queue';
+
 const NAVIGATION_SEQUENCE_KEY = 'navigation:sequence';
 const COMMITTED_PREFIX = 'navigation:committed:';
-let navigationStateQueue = Promise.resolve();
+const queue = createSerialQueue();
 
 function committedKey(tabId: number): string {
   return `${COMMITTED_PREFIX}${tabId}`;
-}
-
-function queue<T>(operation: () => Promise<T>): Promise<T> {
-  const current = navigationStateQueue.then(operation, operation);
-  navigationStateQueue = current.then(() => undefined, () => undefined);
-  return current;
 }
 
 function sequenceOf(value: unknown): number {

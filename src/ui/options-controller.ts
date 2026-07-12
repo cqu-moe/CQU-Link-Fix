@@ -22,6 +22,7 @@ import {
   type CustomPermissionLeaseHandle,
 } from '../custom-permission-lease';
 import type { DnrReconciliationStatus, RuleValidationError } from '../rules/dnr-status';
+import { matcherRangeLabel } from '../rules/matcher';
 
 export type { ExactOriginPermission } from './custom-rule';
 
@@ -355,9 +356,7 @@ export async function initializeOptionsController(
     const description = root.createElement('p');
     description.textContent = rule.description;
     const range = root.createElement('code');
-    range.textContent = rule.matcher.kind === 'host-port'
-      ? `${rule.matcher.host}:${rule.matcher.port}`
-      : rule.matcher.host;
+    range.textContent = matcherRangeLabel(rule.matcher);
     article.append(header, description, range);
     if (rule.validationError) {
       const validationError = root.createElement('p');

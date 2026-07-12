@@ -26,7 +26,7 @@ import {
   type DnrReconciliationEvidence,
 } from '../src/rules/dnr';
 import { getDnrReconciliationStatus } from '../src/rules/dnr-status';
-import type { RuleDefinition } from '../src/rules/types';
+import { isYouthArticleMatcher, matcherDnrHandlesUrl } from '../src/rules/matcher';
 import { hasTopLevelCasTicket } from '../src/rules/transform';
 import {
   allocateNavigationSequence,
@@ -79,10 +79,6 @@ function scheduleReconciliation(label = 'Failed to reconcile dynamic DNR rules')
 
 function isExcludedHost(host: string, excludedHosts: readonly string[]): boolean {
   return excludedHosts.some((excluded) => excluded.trim().toLowerCase() === host);
-}
-
-function isHandledByDnr(rule: RuleDefinition, url: URL): boolean {
-  return rule.matcher.kind !== 'youth-article' || !url.search;
 }
 
 function scheduleSafely(label: string, operation: () => Promise<unknown>): void {
@@ -212,8 +208,8 @@ async function rewriteTopFrameNavigation(
     };
     if (
       needsStartupFallback ||
-      !isHandledByDnr(winningRule, url) &&
-      winningRule.matcher.kind === 'youth-article' &&
+      !matcherDnrHandlesUrl(winningRule.matcher, url) &&
+      isYouthArticleMatcher(winningRule.matcher) &&
       winningRule.transformer === 'youth-public'
     ) {
       targetToNavigate = decision.targetUrl;

@@ -1,5 +1,6 @@
 import { BUILT_IN_RULES } from '../rules/builtins';
 import type { CustomRule } from '../rules/types';
+import { exactHostMatcherHost } from '../rules/matcher';
 import {
   assertCustomDnrId,
   CUSTOM_DNR_ID_MAX,
@@ -19,9 +20,10 @@ export interface ExactOriginPermission {
 }
 
 function sourceHosts(rules: readonly CustomRule[]): Set<string> {
-  return new Set(rules.flatMap((rule) =>
-    rule.matcher.kind === 'host' ? [rule.matcher.host.toLowerCase()] : [],
-  ));
+  return new Set(rules.flatMap((rule) => {
+    const host = exactHostMatcherHost(rule.matcher);
+    return host === null ? [] : [host];
+  }));
 }
 
 export function parseCustomRule(
@@ -69,6 +71,7 @@ export function selectNextCustomDnrId(usedIds: Iterable<number>): number | null 
 }
 
 export function customRulePermissions(rule: CustomRule): ExactOriginPermission {
-  if (rule.matcher.kind !== 'host') throw new Error('自定义权限仅支持域名规则');
-  return { origins: customPermissionOriginsForHost(rule.matcher.host) };
+  const host = exactHostMatcherHost(rule.matcher);
+  if (host === null) throw new Error('自定义权限仅支持域名规则');
+  return { origins: customPermissionOriginsForHost(host) };
 }

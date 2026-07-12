@@ -1,10 +1,3 @@
-let backgroundOperationQueue = Promise.resolve();
+import { createSerialQueue } from '../serial-queue';
 
-export function queueBackgroundOperation<T>(operation: () => Promise<T>): Promise<T> {
-  const current = backgroundOperationQueue.then(operation, operation);
-  backgroundOperationQueue = current.then(
-    () => undefined,
-    () => undefined,
-  );
-  return current;
-}
+export const queueBackgroundOperation = createSerialQueue();

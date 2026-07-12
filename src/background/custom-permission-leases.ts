@@ -10,6 +10,7 @@ import {
   type CustomPermissionLeaseReleaseOptions,
 } from '../custom-permission-lease';
 import { BUILT_IN_RULES } from '../rules/builtins';
+import { exactHostMatcherHost, permissionOriginsForRule } from '../rules/matcher';
 import {
   CQU_OPTIONAL_ORIGINS,
   loadSettings,
@@ -21,13 +22,7 @@ const LEASES_KEY = 'customPermissionLeases';
 const PENDING_CLEANUP_KEY = 'customPermissionCleanupOrigins';
 const ALL_CQU_WILDCARD_ORIGIN = CQU_OPTIONAL_ORIGINS.origins[1]!;
 const BUILT_IN_PERMISSION_ORIGINS = parseCustomPermissionCleanupOrigins(
-  BUILT_IN_RULES.flatMap((rule) => {
-    if (rule.matcher.kind === 'host-port') return [];
-    if (rule.transformer === 'atrust-domain') {
-      return customPermissionOriginsForHost(rule.matcher.host);
-    }
-    return [`*://${rule.matcher.host}/*`];
-  }),
+  BUILT_IN_RULES.flatMap(permissionOriginsForRule),
 );
 
 async function loadActiveLeases(now: number): Promise<CustomPermissionLeaseRecord[]> {
@@ -110,8 +105,9 @@ function requiredPermissionOrigins(
     for (const origin of CQU_OPTIONAL_ORIGINS.origins) requiredOrigins.add(origin);
   }
   for (const rule of settings.customRules) {
-    if (rule.matcher.kind !== 'host') continue;
-    for (const origin of customPermissionOriginsForHost(rule.matcher.host)) {
+    const host = exactHostMatcherHost(rule.matcher);
+    if (host === null) continue;
+    for (const origin of customPermissionOriginsForHost(host)) {
       requiredOrigins.add(origin);
     }
   }
@@ -172,8 +168,11 @@ export async function cleanupDeletedCustomRulePermissions(
   const nextRuleIds = new Set(next.customRules.map((rule) => rule.id));
   const cleanupCandidates = new Set(
     previous.customRules
-      .filter((rule) => !nextRuleIds.has(rule.id) && rule.matcher.kind === 'host')
-      .flatMap((rule) => customPermissionOriginsForHost(rule.matcher.host)),
+      .filter((rule) => !nextRuleIds.has(rule.id))
+      .flatMap((rule) => {
+        const host = exactHostMatcherHost(rule.matcher);
+        return host === null ? [] : customPermissionOriginsForHost(host);
+      }),
   );
   if (cleanupCandidates.size === 0) return;
 

@@ -6,8 +6,7 @@ import {
   hasTopLevelCasTicket,
 } from './transform';
 import type { RewriteDecision, RuleDefinition } from './types';
-
-const EXPLICIT_PORT = /^[a-z][a-z\d+.-]*:\/\/[^/?#]*:(\d+)(?=[/?#]|$)/i;
+import { matchesRuleMatcher } from './matcher';
 
 export function getEnabledRules(settings: ExtensionSettings): RuleDefinition[] {
   if (!settings.enabled) return [];
@@ -37,7 +36,7 @@ export function decideRegisteredRewrite(
   ) {
     return null;
   }
-  const rule = rules.find((candidate) => matchesRule(input, url, candidate));
+  const rule = rules.find((candidate) => matchesRuleMatcher(input, url, candidate.matcher));
   if (!rule) return null;
 
   const targetUrl = applyTransformer(rule.transformer, input);
@@ -45,18 +44,4 @@ export function decideRegisteredRewrite(
     assertCasServicePreserved(input, targetUrl);
   }
   return { ruleId: rule.id, originalUrl: input, targetUrl };
-}
-
-function matchesRule(input: string, url: URL, rule: RuleDefinition): boolean {
-  const matcher = rule.matcher;
-  const hostname = url.hostname.toLowerCase();
-  const expectedHost = matcher.host.toLowerCase();
-  if (hostname !== expectedHost) return false;
-
-  if (matcher.kind === 'host') return !url.port;
-  if (matcher.kind === 'host-port') {
-    const explicitPort = EXPLICIT_PORT.exec(input)?.[1];
-    return explicitPort !== undefined && Number(explicitPort) === matcher.port;
-  }
-  return !url.port && /^\/info\/\d+\/\d+\.htm$/.test(url.pathname);
 }

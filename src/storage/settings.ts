@@ -3,9 +3,9 @@ import { BUILT_IN_RULES } from '../rules/builtins';
 import {
   assertCustomDnrId,
   isBuiltInSourceHost,
-  normalizeCustomCquHost,
   normalizeDnsHost,
 } from '../rules/custom-rule-policy';
+import { parsePersistedCustomMatcher } from '../rules/matcher';
 import { queueBackgroundOperation } from '../background/coordination';
 
 export interface ExtensionSettings {
@@ -415,21 +415,7 @@ function parseCustomRule(value: unknown): CustomRule {
   } catch {
     throw new Error('Custom DNR rule ID is invalid');
   }
-  if (value.matcher.kind === 'host') {
-    if (!hasExactKeys(value.matcher, ['host', 'kind'])) {
-      throw new Error('Custom host matcher has an invalid shape');
-    }
-    let host: string;
-    try {
-      host = normalizeCustomCquHost(value.matcher.host);
-    } catch {
-      throw new Error('Custom host rule is invalid');
-    }
-    if (value.transformer !== 'atrust-domain') throw new Error('Custom host rule is invalid');
-    matcher = { kind: 'host', host };
-  } else {
-    throw new Error('Custom matcher kind is invalid');
-  }
+  matcher = parsePersistedCustomMatcher(value.matcher, value.transformer);
 
   return {
     id: value.id.trim(),
