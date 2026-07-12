@@ -19,7 +19,11 @@ import {
   type BackgroundResponse,
 } from '../src/messages';
 import { decideRegisteredRewrite, getEnabledRules } from '../src/rules/registry';
-import { compareRulePrecedence, reconcileDynamicRules } from '../src/rules/dnr';
+import {
+  compareRulePrecedence,
+  persistedDnrOwnsRewrite,
+  reconcileDynamicRules,
+} from '../src/rules/dnr';
 import type { RuleDefinition } from '../src/rules/types';
 import { hasTopLevelCasTicket } from '../src/rules/transform';
 import {
@@ -49,7 +53,8 @@ import { queueBackgroundOperation } from '../src/background/coordination';
 const latestTopFrameNavigation = new Map<number, symbol>();
 const tabFinalizationQueues = new Map<number, Promise<void>>();
 let recordGeneration = 0;
-let startupReconciliation: Promise<boolean> = Promise.resolve(true);
+let startupReconciliation: Promise<Browser.declarativeNetRequest.Rule[] | null> =
+  Promise.resolve([]);
 let startupReconciliationPending = false;
 
 const settingsMutationHooks = {
@@ -166,9 +171,9 @@ async function rewriteTopFrameNavigation(
 
   if (await isOriginalBypass(details.tabId, details.url)) return;
 
-  let needsStartupFallback = false;
+  let previousDynamicRules: Browser.declarativeNetRequest.Rule[] | null = [];
   if (startedBeforeDnrReady) {
-    needsStartupFallback = !await startupReconciliation;
+    previousDynamicRules = await startupReconciliation;
     if (latestTopFrameNavigation.get(details.tabId) !== navigationToken) return;
   }
 
@@ -183,6 +188,13 @@ async function rewriteTopFrameNavigation(
   let record: RewriteRecord | null = null;
 
   if (decision && winningRule) {
+    const needsStartupFallback = startedBeforeDnrReady &&
+      (previousDynamicRules === null || !persistedDnrOwnsRewrite(
+        previousDynamicRules,
+        details.url,
+        winningRule.dnrId,
+        decision.targetUrl,
+      ));
     record = {
       tabId: details.tabId,
       ruleId: decision.ruleId,
@@ -406,10 +418,10 @@ export default defineBackground(() => {
   recordGeneration = 0;
   startupReconciliationPending = true;
   startupReconciliation = queueBackgroundOperation(() => reconcileDynamicRules())
-    .then((result) => result.hadDynamicRules)
+    .then((result) => result.previousDynamicRules)
     .catch((error: unknown) => {
       console.error('Failed to reconcile dynamic DNR rules at startup', error);
-      return false;
+      return null;
     })
     .finally(() => {
       startupReconciliationPending = false;

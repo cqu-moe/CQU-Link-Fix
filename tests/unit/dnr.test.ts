@@ -643,6 +643,43 @@ describe('background reconciliation hooks', () => {
 
     expect(updateTab).not.toHaveBeenCalled();
   });
+
+  it.each([
+    ['partial unrelated rules', (rules: Browser.declarativeNetRequest.Rule[]) =>
+      rules.filter((rule) => rule.id !== BUILT_IN_RULES[0]!.dnrId)],
+    ['a stale same-ID redirect', (rules: Browser.declarativeNetRequest.Rule[]) =>
+      rules.map((rule) => rule.id === BUILT_IN_RULES[0]!.dnrId
+        ? {
+            ...rule,
+            action: {
+              type: 'redirect' as const,
+              redirect: { regexSubstitution: 'https://library-cqu-edu-cn-s.atrust.cqu.edu.cn\\1' },
+            },
+            condition: {
+              ...rule.condition,
+              regexFilter: '^https?://library\\.cqu\\.edu\\.cn((?:[/?].*)?)$',
+            },
+          }
+        : rule)],
+  ])('manually completes an early SSO navigation when persisted DNR has %s', async (_label, select) => {
+    await saveSettings(DEFAULT_SETTINGS);
+    mockRegexSupport().mockResolvedValue({ isSupported: true });
+    const persisted = select(compileDynamicRules(BUILT_IN_RULES, []));
+    mockGetDynamicRules().mockResolvedValue(persisted);
+    const startup = deferred<void>();
+    mockUpdateDynamicRules().mockReturnValueOnce(startup.promise);
+    const updateTab = mockUpdateTab().mockResolvedValue(undefined);
+    background.main!();
+
+    await fakeBrowser.webNavigation.onBeforeNavigate.trigger(
+      navigationDetails('https://sso.cqu.edu.cn/login'),
+    );
+    startup.resolve();
+
+    await vi.waitFor(() => expect(updateTab).toHaveBeenCalledWith(7, {
+      url: 'https://sso-cqu-edu-cn-s.atrust.cqu.edu.cn/login',
+    }));
+  });
 });
 
 describe('queried Youth navigation routing', () => {

@@ -12,6 +12,9 @@ import {
   type RewriteRecord,
 } from '../../src/background/session';
 import {
+  retryPendingCustomPermissionCleanup,
+} from '../../src/background/custom-permission-leases';
+import {
   DEFAULT_SETTINGS,
   loadSettings,
   loadSettingsSnapshot,
@@ -1379,6 +1382,57 @@ describe('background session lifecycle, errors, and messages', () => {
     await expect(response).resolves.toEqual([{ ok: true, revision: 2 }]);
   });
 
+  it('keeps a successful deletion committed when post-removal debt clearing fails', async () => {
+    const customRule = {
+      id: 'deleted-rule', dnrId: 10_001, name: 'library.cqu.edu.cn', description: 'custom',
+      category: 'custom' as const, defaultEnabled: true,
+      matcher: { kind: 'host' as const, host: 'library.cqu.edu.cn' },
+      transformer: 'atrust-domain' as const,
+    };
+    const origins = [
+      '*://library.cqu.edu.cn/*',
+      'https://library-cqu-edu-cn-s.atrust.cqu.edu.cn/*',
+    ];
+    await saveSettings({ ...DEFAULT_SETTINGS, customRules: [customRule] });
+    await startBackground();
+    const originalSet = browser.storage.local.set.bind(browser.storage.local);
+    let debtWrites = 0;
+    vi.spyOn(browser.storage.local, 'set').mockImplementation(async (items) => {
+      if (Object.hasOwn(items, 'customPermissionCleanupOrigins')) {
+        debtWrites += 1;
+        if (debtWrites === 2) throw new Error('post-removal debt clear failed');
+      }
+      await originalSet(items);
+    });
+    const remove = vi.spyOn(browser.permissions, 'remove')
+      .mockResolvedValueOnce(true as never)
+      .mockResolvedValueOnce(false as never);
+    vi.spyOn(browser.permissions, 'contains').mockResolvedValue(false as never);
+
+    await expect(fakeBrowser.runtime.onMessage.trigger({
+      type: 'replace-settings',
+      expectedRevision: 1,
+      settings: {
+        enabled: true,
+        disabledRuleIds: [],
+        customRules: [],
+        excludedHosts: [],
+      },
+    }, { id: browser.runtime.id })).resolves.toEqual([{ ok: true, revision: 2 }]);
+
+    expect(await loadSettingsSnapshot()).toEqual({ settings: DEFAULT_SETTINGS, revision: 2 });
+    expect(browser.declarativeNetRequest.updateDynamicRules).toHaveBeenCalledTimes(2);
+    expect(remove).toHaveBeenCalledWith({ origins });
+    expect((await browser.storage.local.get('customPermissionCleanupOrigins'))
+      .customPermissionCleanupOrigins).toEqual(origins);
+
+    await retryPendingCustomPermissionCleanup();
+
+    expect(remove).toHaveBeenCalledTimes(2);
+    expect((await browser.storage.local.get('customPermissionCleanupOrigins'))
+      .customPermissionCleanupOrigins).toEqual([]);
+  });
+
   it('defers deleted-rule cleanup until the active same-origin lease releases', async () => {
     const customRule = {
       id: 'leased-rule', dnrId: 10_001, name: 'library.cqu.edu.cn', description: 'custom',
@@ -1408,7 +1462,7 @@ describe('background session lifecycle, errors, and messages', () => {
       },
     }, { id: browser.runtime.id })).resolves.toEqual([{ ok: true, revision: 2 }]);
     expect(remove).not.toHaveBeenCalled();
-    expect((await browser.storage.session.get('customPermissionCleanupOrigins'))
+    expect((await browser.storage.local.get('customPermissionCleanupOrigins'))
       .customPermissionCleanupOrigins).toEqual([
         '*://library.cqu.edu.cn/*',
         'https://library-cqu-edu-cn-s.atrust.cqu.edu.cn/*',
@@ -1425,7 +1479,24 @@ describe('background session lifecycle, errors, and messages', () => {
         'https://library-cqu-edu-cn-s.atrust.cqu.edu.cn/*',
       ],
     });
-    expect((await browser.storage.session.get('customPermissionCleanupOrigins'))
+    expect((await browser.storage.local.get('customPermissionCleanupOrigins'))
+      .customPermissionCleanupOrigins).toEqual([]);
+  });
+
+  it('retries durable cleanup debt during background startup after session state is lost', async () => {
+    const origins = [
+      '*://library.cqu.edu.cn/*',
+      'https://library-cqu-edu-cn-s.atrust.cqu.edu.cn/*',
+    ];
+    await saveSettings(DEFAULT_SETTINGS);
+    await browser.storage.local.set({ customPermissionCleanupOrigins: origins });
+    await browser.storage.session.clear();
+    const remove = vi.spyOn(browser.permissions, 'remove').mockResolvedValue(true as never);
+
+    await startBackground();
+
+    await vi.waitFor(() => expect(remove).toHaveBeenCalledWith({ origins }));
+    expect((await browser.storage.local.get('customPermissionCleanupOrigins'))
       .customPermissionCleanupOrigins).toEqual([]);
   });
 });

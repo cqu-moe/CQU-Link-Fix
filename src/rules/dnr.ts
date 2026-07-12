@@ -203,9 +203,92 @@ export function compileDynamicRules(
   return compiled;
 }
 
+function requestUrl(input: string): string {
+  const url = new URL(input);
+  url.hash = '';
+  return url.toString();
+}
+
+function matchingRegexRedirectTarget(
+  rule: Browser.declarativeNetRequest.Rule,
+  input: string,
+): string | null {
+  const condition = rule.condition;
+  const supportedConditionKeys = new Set([
+    'isUrlFilterCaseSensitive',
+    'regexFilter',
+    'resourceTypes',
+  ]);
+  if (Object.keys(condition).some((key) => !supportedConditionKeys.has(key))) return null;
+  if (condition.resourceTypes && !condition.resourceTypes.includes('main_frame')) return null;
+  if (!condition.regexFilter || rule.action.type !== 'redirect') return null;
+  const substitution = rule.action.redirect?.regexSubstitution;
+  if (!substitution) return null;
+
+  let match: RegExpExecArray | null;
+  try {
+    match = new RegExp(
+      condition.regexFilter,
+      condition.isUrlFilterCaseSensitive ? '' : 'i',
+    ).exec(requestUrl(input));
+  } catch {
+    return null;
+  }
+  if (!match) return null;
+  return substitution.replace(/\\([0-9])/g, (_capture, index: string) =>
+    match?.[Number(index)] ?? '',
+  );
+}
+
+export function persistedDnrOwnsRewrite(
+  rules: readonly Browser.declarativeNetRequest.Rule[],
+  input: string,
+  expectedRuleId: number,
+  expectedTarget: string,
+): boolean {
+  const matching: Array<{
+    rule: Browser.declarativeNetRequest.Rule;
+    priority: number;
+    target: string | null;
+  }> = [];
+  for (const rule of rules) {
+    const priority = rule.priority;
+    if (typeof priority !== 'number') continue;
+    const target = matchingRegexRedirectTarget(rule, input);
+    if (target) {
+      matching.push({ rule, priority, target });
+      continue;
+    }
+
+    const condition = rule.condition;
+    if (!condition.regexFilter || rule.action.type === 'redirect') continue;
+    try {
+      const regex = new RegExp(
+        condition.regexFilter,
+        condition.isUrlFilterCaseSensitive ? '' : 'i',
+      );
+      if (regex.test(requestUrl(input))) matching.push({ rule, priority, target: null });
+    } catch {
+      // Unknown stale rules are not trusted as ownership evidence.
+    }
+  }
+  if (matching.length === 0) return false;
+  const highestPriority = Math.max(...matching.map(({ priority }) => priority));
+  const winners = matching.filter(({ priority }) => priority === highestPriority);
+  if (winners.length !== 1) return false;
+  const winner = winners[0]!;
+  try {
+    return winner.rule.id === expectedRuleId &&
+      winner.target !== null &&
+      requestUrl(winner.target) === requestUrl(expectedTarget);
+  } catch {
+    return false;
+  }
+}
+
 export async function reconcileDynamicRules(
   settingsInput?: ExtensionSettings,
-): Promise<{ hadDynamicRules: boolean }> {
+): Promise<{ previousDynamicRules: Browser.declarativeNetRequest.Rule[] }> {
   const settings = settingsInput ?? await loadSettings();
   const next = compileDynamicRules(getEnabledRules(settings), settings.excludedHosts);
 
@@ -227,5 +310,5 @@ export async function reconcileDynamicRules(
     removeRuleIds: current.map((rule) => rule.id),
     addRules: next,
   });
-  return { hadDynamicRules: current.length > 0 };
+  return { previousDynamicRules: structuredClone(current) };
 }

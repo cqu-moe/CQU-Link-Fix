@@ -209,16 +209,19 @@ export async function sessionState(app: ExtensionApp, tabId: number): Promise<un
 
 export async function beginExtensionWorkerRestart(
   app: ExtensionApp,
-  options: { clearDynamicRules: boolean },
+  options: { clearDynamicRules: boolean; retainDynamicRuleIds?: readonly number[] },
 ): Promise<{ restarted: Promise<void> }> {
   const previous = app.worker;
-  if (options.clearDynamicRules) {
-    await previous.evaluate(async () => {
+  if (options.clearDynamicRules || options.retainDynamicRuleIds) {
+    await previous.evaluate(async ({ clearDynamicRules, retainDynamicRuleIds }) => {
       const rules = await chrome.declarativeNetRequest.getDynamicRules();
+      const retained = new Set(retainDynamicRuleIds ?? []);
       await chrome.declarativeNetRequest.updateDynamicRules({
-        removeRuleIds: rules.map((rule) => rule.id),
+        removeRuleIds: rules
+          .filter((rule) => clearDynamicRules || !retained.has(rule.id))
+          .map((rule) => rule.id),
       });
-    });
+    }, options);
   }
   const controlPage = app.context.pages()[0] ?? await app.context.newPage();
   const cdp = await app.context.newCDPSession(controlPage);

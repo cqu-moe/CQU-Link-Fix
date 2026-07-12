@@ -29,7 +29,7 @@ async function writeLeases(leases: readonly CustomPermissionLeaseRecord[]): Prom
 }
 
 async function loadPendingCleanupOrigins(): Promise<string[]> {
-  const stored = await browser.storage.session.get(PENDING_CLEANUP_KEY);
+  const stored = await browser.storage.local.get(PENDING_CLEANUP_KEY);
   try {
     return parseCustomPermissionCleanupOrigins(stored[PENDING_CLEANUP_KEY] ?? []);
   } catch {
@@ -38,7 +38,7 @@ async function loadPendingCleanupOrigins(): Promise<string[]> {
 }
 
 async function writePendingCleanupOrigins(origins: readonly string[]): Promise<void> {
-  await browser.storage.session.set({
+  await browser.storage.local.set({
     [PENDING_CLEANUP_KEY]: parseCustomPermissionCleanupOrigins(origins),
   });
 }
@@ -74,10 +74,17 @@ async function settlePendingCleanup(
     }
   }
   const removableOrigins = pending.filter((origin) => !requiredOrigins.has(origin));
+  if (removableOrigins.length === 0) return;
   await removeExactOrigins(removableOrigins);
-  await writePendingCleanupOrigins(
-    pending.filter((origin) => requiredOrigins.has(origin)),
-  );
+  try {
+    await writePendingCleanupOrigins(
+      pending.filter((origin) => requiredOrigins.has(origin)),
+    );
+  } catch (error) {
+    // Permission removal cannot be rolled back without a user gesture. Retaining
+    // the already-persisted superset makes the cleanup retryable and idempotent.
+    console.error('Failed to clear completed custom permission cleanup debt', error);
+  }
 }
 
 export async function cleanupDeletedCustomRulePermissions(

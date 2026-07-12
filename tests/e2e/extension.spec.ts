@@ -13,9 +13,9 @@ const SSO_TARGET = 'sso-cqu-edu-cn-s.atrust.cqu.edu.cn';
 
 async function countSsoTargetNavigations(
   extension: import('./helpers').ExtensionApp,
-  clearDynamicRules: boolean,
+  restartOptions: Parameters<typeof beginExtensionWorkerRestart>[1],
 ): Promise<number> {
-  const restart = await beginExtensionWorkerRestart(extension, { clearDynamicRules });
+  const restart = await beginExtensionWorkerRestart(extension, restartOptions);
   const page = await extension.context.newPage();
   let targetNavigations = 0;
   page.on('request', (request) => {
@@ -161,11 +161,18 @@ test.describe('loaded extension redirects', () => {
 
 test.describe('service-worker startup fallback boundary', () => {
   test('completes one target navigation from a fresh empty-DNR worker start', async ({ extension }) => {
-    expect(await countSsoTargetNavigations(extension, true)).toBe(1);
+    expect(await countSsoTargetNavigations(extension, { clearDynamicRules: true })).toBe(1);
   });
 
   test('does not double-navigate when persisted DNR survives a worker restart', async ({ extension }) => {
-    expect(await countSsoTargetNavigations(extension, false)).toBe(1);
+    expect(await countSsoTargetNavigations(extension, { clearDynamicRules: false })).toBe(1);
+  });
+
+  test('manually completes one navigation when persisted DNR is partial and unrelated', async ({ extension }) => {
+    expect(await countSsoTargetNavigations(extension, {
+      clearDynamicRules: false,
+      retainDynamicRuleIds: [2001],
+    })).toBe(1);
   });
 });
 

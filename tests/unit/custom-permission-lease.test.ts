@@ -2,7 +2,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fakeBrowser } from 'wxt/testing/fake-browser';
 import {
   acquireCustomPermissionLease,
+  cleanupDeletedCustomRulePermissions,
   releaseCustomPermissionLease,
+  retryPendingCustomPermissionCleanup,
   renewCustomPermissionLease,
 } from '../../src/background/custom-permission-leases';
 import { CUSTOM_PERMISSION_LEASE_TTL_MS } from '../../src/custom-permission-lease';
@@ -157,6 +159,32 @@ describe('custom permission leases', () => {
 
     expect(remove).toHaveBeenCalledOnce();
     expect(remove).toHaveBeenCalledWith({ origins: [...LIBRARY_ORIGINS] });
+  });
+
+  it('persists deferred cleanup debt across a full session reset and retries it', async () => {
+    const previous = {
+      ...DEFAULT_SETTINGS,
+      customRules: [customRule('library.cqu.edu.cn')],
+    };
+    const next = { ...DEFAULT_SETTINGS, customRules: [] };
+    await saveSettings(next);
+    await acquireCustomPermissionLease([...LIBRARY_ORIGINS], 1_000);
+    const remove = vi.spyOn(browser.permissions, 'remove').mockResolvedValue(true as never);
+
+    await cleanupDeletedCustomRulePermissions(next, previous, 1_001);
+
+    expect(remove).not.toHaveBeenCalled();
+    expect((await browser.storage.local.get('customPermissionCleanupOrigins'))
+      .customPermissionCleanupOrigins).toEqual(LIBRARY_ORIGINS);
+    expect((await browser.storage.session.get('customPermissionCleanupOrigins'))
+      .customPermissionCleanupOrigins).toBeUndefined();
+
+    await browser.storage.session.clear();
+    await retryPendingCustomPermissionCleanup(1_002);
+
+    expect(remove).toHaveBeenCalledWith({ origins: [...LIBRARY_ORIGINS] });
+    expect((await browser.storage.local.get('customPermissionCleanupOrigins'))
+      .customPermissionCleanupOrigins).toEqual([]);
   });
 
   it('serializes a later same-origin lease acquisition behind authoritative permission removal', async () => {
