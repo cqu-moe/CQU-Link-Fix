@@ -79,6 +79,79 @@ test.describe('loaded extension redirects', () => {
     });
   }
 
+  test('rewrites an SSO navigation initiated by an in-page link click', async ({ extension }) => {
+    const page = await extension.context.newPage();
+    await page.goto('https://client.example/link-source');
+
+    await page.locator('#sso-link').click();
+
+    await expect.poll(() => new URL(page.url()).hostname).toBe(SSO_TARGET);
+    expect(new URL(page.url()).searchParams.get('service')).toBe('/clicked');
+  });
+
+  test('rewrites the original SSO location from a server-side CAS 302', async ({ extension }) => {
+    const page = await extension.context.newPage();
+    const cdp = await extension.context.newCDPSession(page);
+    cdp.on('Fetch.requestPaused', (event: {
+      requestId: string;
+      request: { url: string };
+      resourceType: string;
+    }) => {
+      void cdp.send('Fetch.fulfillRequest', {
+        requestId: event.requestId,
+        responseCode: 200,
+        responseHeaders: [{ name: 'content-type', value: 'text/html; charset=utf-8' }],
+        body: Buffer.from('<!doctype html><title>synthetic CAS target</title>').toString('base64'),
+      });
+    });
+    await cdp.send('Fetch.enable', {
+      patterns: [{
+        urlPattern: `https://${SSO_TARGET}/login*`,
+        resourceType: 'Document',
+        requestStage: 'Request',
+      }],
+    });
+
+    try {
+      await page.goto('http://client.example/cas-start');
+    } finally {
+      await cdp.send('Fetch.disable');
+      await cdp.detach();
+    }
+
+    const rewritten = new URL(page.url());
+    expect(rewritten.hostname).toBe(SSO_TARGET);
+    expect(rewritten.searchParams.get('service')).toBe(
+      'https://client.example/callback?state=a%20b',
+    );
+  });
+
+  test('does not loop across browser back and forward history', async ({ extension }) => {
+    const page = await extension.context.newPage();
+    let targetNavigations = 0;
+    page.on('request', (request) => {
+      if (
+        request.isNavigationRequest() &&
+        new URL(request.url()).hostname === SSO_TARGET
+      ) targetNavigations += 1;
+    });
+
+    await page.goto('https://client.example/link-source');
+    await page.locator('#sso-link').click();
+    await expect.poll(() => new URL(page.url()).hostname).toBe(SSO_TARGET);
+    await page.goto('https://client.example/after');
+
+    await page.goBack();
+    await expect.poll(() => new URL(page.url()).hostname).toBe(SSO_TARGET);
+    await page.goBack();
+    await expect.poll(() => new URL(page.url()).pathname).toBe('/link-source');
+    await page.goForward();
+    await expect.poll(() => new URL(page.url()).hostname).toBe(SSO_TARGET);
+    await page.goForward();
+    await expect.poll(() => new URL(page.url()).pathname).toBe('/after');
+    expect(targetNavigations).toBeLessThanOrEqual(3);
+  });
+
   test('leaves a top-level CAS ticket callback on the original host without recording it', async ({ extension }) => {
     const page = await extension.context.newPage();
     const original = 'https://sso.cqu.edu.cn/login?state=x&ticket=synthetic';
@@ -174,6 +247,31 @@ test.describe('service-worker startup fallback boundary', () => {
       retainDynamicRuleIds: [2001],
     })).toBe(1);
   });
+
+  test('preserves a disabled built-in across a worker upgrade boundary', async ({ extension }) => {
+    const options = await extension.openExtensionPage('options.html', true);
+    await expect(options.locator('#status')).toContainText('设置已加载');
+    await options.locator('[data-rule-id="core-sso"]').click();
+    await expect(options.locator('[data-rule-id="core-sso"]')).not.toBeChecked();
+    await expect.poll(() => options.evaluate(async () => {
+      const stored = await chrome.storage.local.get('settings');
+      return (stored.settings as { disabledRuleIds?: string[] } | undefined)
+        ?.disabledRuleIds ?? [];
+    })).toContain('core-sso');
+
+    const restart = await beginExtensionWorkerRestart(extension, { clearDynamicRules: false });
+    const page = await extension.context.newPage();
+    const original = 'https://sso.cqu.edu.cn/login?service=%2Fupgrade';
+    await page.goto(original);
+    await restart.restarted;
+
+    expect(page.url()).toBe(original);
+    await expect.poll(() => options.evaluate(async () => {
+      const stored = await chrome.storage.local.get('settings');
+      return (stored.settings as { disabledRuleIds?: string[] } | undefined)
+        ?.disabledRuleIds ?? [];
+    })).toContain('core-sso');
+  });
 });
 
 test.describe('rewrite records, UI, and original bypass', () => {
@@ -192,6 +290,7 @@ test.describe('rewrite records, UI, and original bypass', () => {
     });
 
     const popup = await extension.openExtensionPage('popup.html');
+    await expect(popup.locator('#runtime-status')).toHaveText('扩展运行中');
     await expect(popup.locator('#status')).toHaveText('已通过 aTrust 打开');
     await expect(popup.locator('#route')).toContainText('sso.cqu.edu.cn');
     await expect(popup.locator('#rule')).toHaveText('规则：core-sso');

@@ -1,6 +1,8 @@
 /// <reference types="chrome" />
 
 import { mkdtemp, rm } from 'node:fs/promises';
+import { createServer } from 'node:http';
+import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import {
@@ -20,6 +22,7 @@ const FIXTURE_HOSTS = [
   'library-cqu-edu-cn-s.atrust.cqu.edu.cn',
   'portal.cqu.edu.cn',
   'portal-cqu-edu-cn-s.atrust.cqu.edu.cn',
+  'client.example',
 ] as const;
 
 interface ExtensionError {
@@ -69,11 +72,30 @@ function attachWorkerDiagnostics(worker: Worker, errors: ExtensionError[]): void
   });
 }
 
-async function installFixtureRoutes(context: BrowserContext): Promise<void> {
+async function installFixtureRoutes(
+  context: BrowserContext,
+  redirectFixtureOrigin: string,
+): Promise<void> {
   for (const host of FIXTURE_HOSTS) {
     for (const protocol of ['http', 'https'] as const) {
       await context.route(`${protocol}://${host}/**`, async (route) => {
         const url = new URL(route.request().url());
+        if (host === 'client.example' && url.pathname === '/cas-start') {
+          await route.continue({
+            url: `${redirectFixtureOrigin}/cas-start`,
+          });
+          return;
+        }
+        if (host === 'client.example' && url.pathname === '/link-source') {
+          await route.fulfill({
+            status: 200,
+            contentType: 'text/html; charset=utf-8',
+            body: '<!doctype html><html><body>' +
+              '<a id="sso-link" href="https://sso.cqu.edu.cn/login?service=%2Fclicked">登录</a>' +
+              '</body></html>',
+          });
+          return;
+        }
         await route.fulfill({
           status: 200,
           contentType: 'text/html; charset=utf-8',
@@ -84,11 +106,42 @@ async function installFixtureRoutes(context: BrowserContext): Promise<void> {
   }
 }
 
+async function startRedirectFixtureServer(): Promise<{
+  origin: string;
+  close: () => Promise<void>;
+}> {
+  const server = createServer((request, response) => {
+    if (request.url !== '/cas-start') {
+      response.writeHead(404).end();
+      return;
+    }
+    response.writeHead(302, {
+      location: 'https://sso.cqu.edu.cn/login?service=' +
+        'https%3A%2F%2Fclient.example%2Fcallback%3Fstate%3Da%2520b',
+    }).end();
+  });
+  await new Promise<void>((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', () => {
+      server.off('error', reject);
+      resolve();
+    });
+  });
+  const address = server.address() as AddressInfo;
+  return {
+    origin: `http://127.0.0.1:${address.port}`,
+    close: () => new Promise<void>((resolve, reject) => {
+      server.close((error) => error ? reject(error) : resolve());
+    }),
+  };
+}
+
 export async function launchExtension(): Promise<ExtensionApp> {
   const extensionPath = path.resolve('.output/chrome-mv3');
   const userDataDir = await mkdtemp(path.join(tmpdir(), 'cqu-link-fix-'));
   const errors: ExtensionError[] = [];
   let context: BrowserContext | null = null;
+  const redirectFixture = await startRedirectFixtureServer();
 
   try {
     context = await chromium.launchPersistentContext(userDataDir, {
@@ -104,7 +157,7 @@ export async function launchExtension(): Promise<ExtensionApp> {
     for (const page of context.pages()) attachPageDiagnostics(page, errors);
     context.on('page', (page) => attachPageDiagnostics(page, errors));
     context.on('serviceworker', (nextWorker) => attachWorkerDiagnostics(nextWorker, errors));
-    await installFixtureRoutes(context);
+    await installFixtureRoutes(context, redirectFixture.origin);
 
     const worker = context.serviceWorkers()[0] ?? await context.waitForEvent('serviceworker', {
       timeout: 15_000,
@@ -129,6 +182,7 @@ export async function launchExtension(): Promise<ExtensionApp> {
       } catch (error) {
         closeError = error;
       } finally {
+        await redirectFixture.close();
         await rm(userDataDir, { recursive: true, force: true });
       }
       if (closeError) throw closeError;
@@ -160,6 +214,7 @@ export async function launchExtension(): Promise<ExtensionApp> {
     try {
       if (context) await context.close();
     } finally {
+      await redirectFixture.close();
       await rm(userDataDir, { recursive: true, force: true });
     }
     throw error;
