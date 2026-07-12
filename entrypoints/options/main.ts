@@ -3,8 +3,8 @@ import { BUILT_IN_RULES } from '../../src/rules/builtins';
 import {
   getSettingsSnapshotViaBackground,
   replaceSettingsViaBackground,
-  setAllCquMode,
-} from '../../src/storage/settings';
+} from '../../src/storage/settings-client';
+import { setAllCquMode } from '../../src/storage/settings-permissions';
 import { initializeOptionsController } from '../../src/ui/options-controller';
 import { getDnrStatusViaBackground } from '../../src/ui/dnr-status-client';
 import {

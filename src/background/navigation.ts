@@ -1,4 +1,4 @@
-import { type ExtensionSettings } from '../storage/settings';
+import type { ExtensionSettings } from '../storage/settings-types';
 import {
   hasTopLevelCasTicket,
   isAtrustUrl,

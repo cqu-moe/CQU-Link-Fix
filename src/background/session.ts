@@ -6,7 +6,8 @@ import {
   sameRequestUrl,
   type RewriteRecord,
 } from '../rewrite-record';
-import { updateSettings, type SettingsMutationHooks } from '../storage/settings';
+import { updateSettings } from '../storage/settings-repository';
+import type { SettingsMutationHooks } from '../storage/settings-types';
 
 export { canonicalRequestUrl, sameRequestUrl, type RewriteRecord } from '../rewrite-record';
 

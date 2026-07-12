@@ -1,5 +1,5 @@
 import './style.css';
-import { getSettingsSnapshotViaBackground } from '../../src/storage/settings';
+import { getSettingsSnapshotViaBackground } from '../../src/storage/settings-client';
 import { initializePopupController } from '../../src/ui/popup-controller';
 
 let started = false;

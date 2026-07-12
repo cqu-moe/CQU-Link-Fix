@@ -35,14 +35,14 @@ import {
   getCommittedNavigationSequence,
 } from '../src/background/navigation-state';
 import {
-  CQU_OPTIONAL_ORIGINS,
   loadCommittedSettingsSnapshot,
   loadCommittedSettings,
   replaceSettingsAtRevision,
   SettingsApplyFailed,
   SettingsRevisionConflict,
   updateSettingsSnapshot,
-} from '../src/storage/settings';
+} from '../src/storage/settings-repository';
+import { CQU_OPTIONAL_ORIGINS } from '../src/storage/settings-permissions';
 import {
   acquireCustomPermissionLease,
   cleanupDeletedCustomRulePermissions,

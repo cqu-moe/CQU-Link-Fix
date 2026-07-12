@@ -1,11 +1,11 @@
 import type { CustomRule, RuleDefinition } from '../rules/types';
-import {
-  validateSettingsSnapshot,
-  type EditableSettings,
-  type ExtensionSettings,
-  type ReplaceSettingsResult,
-  type SettingsSnapshot,
-} from '../storage/settings';
+import { validateSettingsSnapshot } from '../storage/settings-codec';
+import type {
+  EditableSettings,
+  ExtensionSettings,
+  ReplaceSettingsResult,
+  SettingsSnapshot,
+} from '../storage/settings-types';
 import {
   customRulePermissions,
   parseCustomRule,

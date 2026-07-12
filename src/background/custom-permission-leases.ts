@@ -12,10 +12,10 @@ import {
 import { BUILT_IN_RULES } from '../rules/builtins';
 import { exactHostMatcherHost, permissionOriginsForRule } from '../rules/matcher';
 import {
-  CQU_OPTIONAL_ORIGINS,
   loadSettings,
-  type ExtensionSettings,
-} from '../storage/settings';
+} from '../storage/settings-repository';
+import { CQU_OPTIONAL_ORIGINS } from '../storage/settings-permissions';
+import type { ExtensionSettings } from '../storage/settings-types';
 import { queueBackgroundOperation } from './coordination';
 
 const LEASES_KEY = 'customPermissionLeases';

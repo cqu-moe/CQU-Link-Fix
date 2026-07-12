@@ -1,4 +1,4 @@
-import type { ExtensionSettings } from '../storage/settings';
+import type { ExtensionSettings } from '../storage/settings-types';
 import { BUILT_IN_RULES } from './builtins';
 import {
   applyTransformer,

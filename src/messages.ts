@@ -1,9 +1,11 @@
 import { MAX_REWRITE_TAB_ID, type RewriteRecord } from './rewrite-record';
 import {
   validateEditableSettings,
-  type EditableSettings,
-  type SettingsSnapshot,
-} from './storage/settings';
+} from './storage/settings-codec';
+import type {
+  EditableSettings,
+  SettingsSnapshot,
+} from './storage/settings-types';
 import {
   isCustomPermissionLeaseNonce,
   parseCustomPermissionCleanupOrigins,

@@ -1,5 +1,6 @@
 import type { Browser } from 'wxt/browser';
-import { loadSettings, type ExtensionSettings } from '../storage/settings';
+import { loadSettings } from '../storage/settings-repository';
+import type { ExtensionSettings } from '../storage/settings-types';
 import { getEnabledRules } from './registry';
 import {
   recordDnrReconciliationStatus,

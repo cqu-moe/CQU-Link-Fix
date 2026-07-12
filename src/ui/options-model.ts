@@ -1,6 +1,6 @@
 import type { RuleCategory, RuleDefinition } from '../rules/types';
 import type { RuleValidationError } from '../rules/dnr-status';
-import type { EditableSettings, ExtensionSettings } from '../storage/settings';
+import type { EditableSettings, ExtensionSettings } from '../storage/settings-types';
 
 const GROUPS: readonly {
   category: Exclude<RuleCategory, 'custom'>;
