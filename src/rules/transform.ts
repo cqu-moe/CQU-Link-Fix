@@ -2,6 +2,7 @@ import type { Transformer } from './types';
 import { normalizeDnsHost } from './custom-rule-policy';
 
 const HTTP_PROTOCOLS = new Set(['http:', 'https:']);
+const ATRUST_HOST = 'atrust.cqu.edu.cn';
 const ATRUST_SUFFIX = '.atrust.cqu.edu.cn';
 const IPV4 = /^(?:\d{1,3}\.){3}\d{1,3}$/;
 const YOUTH_PARAMETERS = new Set(['urltype', 'wbtreeid', 'wbnewsid']);
@@ -29,8 +30,13 @@ function queryParameterName(segment: string): string {
   return new URLSearchParams(`${rawName}=`).keys().next().value ?? '';
 }
 
+function isAtrustHost(host: string): boolean {
+  const normalized = host.toLowerCase();
+  return normalized === ATRUST_HOST || normalized.endsWith(ATRUST_SUFFIX);
+}
+
 export function isAtrustUrl(input: string): boolean {
-  return parseHttpUrl(input).hostname.toLowerCase().endsWith(ATRUST_SUFFIX);
+  return isAtrustHost(parseHttpUrl(input).hostname);
 }
 
 export function isCquDomain(input: string): boolean {
@@ -45,7 +51,7 @@ export function hasTopLevelCasTicket(url: URL): boolean {
 export function toAtrustDomainUrl(input: string): string {
   const url = parseHttpUrl(input);
   const host = url.hostname.toLowerCase();
-  if (host.endsWith(ATRUST_SUFFIX)) throw new Error('URL already uses aTrust');
+  if (isAtrustHost(host)) throw new Error('URL already uses aTrust');
   if (IPV4.test(host) || !isDnsHostname(host)) throw new Error('domain transform requires a DNS hostname');
   if (url.port) throw new Error('domain transform does not accept a non-default port');
   const targetHost = `${host.replaceAll('.', '-')}-s.atrust.cqu.edu.cn`;

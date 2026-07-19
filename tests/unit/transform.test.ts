@@ -115,6 +115,7 @@ describe('Youth League transform', () => {
 
 describe('invariants', () => {
   it('recognizes aTrust and CQU hosts', () => {
+    expect(isAtrustUrl('https://atrust.cqu.edu.cn/portal/#!/login')).toBe(true);
     expect(isAtrustUrl('https://x-s.atrust.cqu.edu.cn/')).toBe(true);
     expect(isCquDomain('https://foo.cqu.edu.cn/')).toBe(true);
   });

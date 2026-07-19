@@ -59,6 +59,7 @@ describe('all-CQU navigation decision', () => {
     ['unsupported scheme', 'ftp://foo.cqu.edu.cn/path'],
     ['username', 'https://user@foo.cqu.edu.cn/path'],
     ['password', 'https://user:secret@foo.cqu.edu.cn/path'],
+    ['aTrust gateway', 'https://atrust.cqu.edu.cn/portal/#!/login'],
     ['aTrust destination', 'https://foo-cqu-edu-cn-s.atrust.cqu.edu.cn/path'],
     ['IPv4 literal', 'https://1.1.1.1/path'],
     ['non-CQU host', 'https://example.com/path'],
