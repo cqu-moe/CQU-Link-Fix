@@ -90,4 +90,24 @@ describe('options section navigation', () => {
     expect(document.querySelector('[data-section-link="built-in"]')?.getAttribute('aria-current'))
       .toBe('location');
   });
+
+  it('selects the final section when scrolling reaches the document end', () => {
+    const createObserver: SectionObserverFactory = () => ({
+      observe: vi.fn(),
+      disconnect: vi.fn(),
+    });
+    Object.defineProperty(window, 'innerHeight', { configurable: true, value: 900 });
+    Object.defineProperty(window, 'scrollY', { configurable: true, value: 600 });
+    Object.defineProperty(document.documentElement, 'scrollHeight', {
+      configurable: true,
+      value: 1500,
+    });
+    const dispose = initializeOptionsNavigation(document, createObserver);
+
+    window.dispatchEvent(new Event('scroll'));
+
+    expect(document.querySelector('[data-section-link="built-in"]')?.getAttribute('aria-current'))
+      .toBe('location');
+    dispose();
+  });
 });

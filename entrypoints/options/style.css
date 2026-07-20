@@ -239,7 +239,7 @@ a:focus-visible {
 }
 
 .section-nav a span {
-  color: #948c81;
+  color: var(--muted);
   font-family: "SFMono-Regular", Consolas, monospace;
   font-size: 10px;
 }
@@ -259,7 +259,7 @@ a:focus-visible {
 
 .section-nav__foot {
   margin: 24px 12px 0;
-  color: #8a8378;
+  color: var(--muted);
   font-size: 9px;
   line-height: 1.6;
 }
@@ -356,6 +356,13 @@ legend {
 .switch-row label,
 .custom-form > label {
   font-weight: 750;
+}
+
+.switch-row__label {
+  display: inline-flex;
+  min-width: 44px;
+  min-height: 44px;
+  align-items: center;
 }
 
 .switch-row p,

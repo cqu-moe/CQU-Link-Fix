@@ -65,8 +65,20 @@ export function initializeOptionsNavigation(
   });
   for (const target of targets) observer.observe(target);
 
+  const view = root.defaultView;
+  const selectFinalSectionAtScrollEnd = (): void => {
+    if (!view) return;
+    const maximumScroll = root.documentElement.scrollHeight - view.innerHeight;
+    const finalTarget = targets.at(-1);
+    if (maximumScroll > 0 && view.scrollY >= maximumScroll - 1 && finalTarget) {
+      select(finalTarget.id);
+    }
+  };
+  view?.addEventListener('scroll', selectFinalSectionAtScrollEnd, { passive: true });
+
   return () => {
     observer.disconnect();
     for (const link of links) link.removeEventListener('click', onClick);
+    view?.removeEventListener('scroll', selectFinalSectionAtScrollEnd);
   };
 }

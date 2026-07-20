@@ -455,6 +455,19 @@ test.describe('rewrite records, UI, and original bypass', () => {
     }
 
     await options.setViewportSize({ width: 700, height: 900 });
+    for (const controlId of ['master-enabled', 'all-cqu-enabled']) {
+      const target = options.locator(`label[for="${controlId}"]`);
+      const targetBox = await target.boundingBox();
+      expect(targetBox, `${controlId} associated label target`).not.toBeNull();
+      expect.soft(
+        targetBox!.height,
+        `${controlId} associated label touch target height`,
+      ).toBeGreaterThanOrEqual(44);
+      expect.soft(
+        targetBox!.width,
+        `${controlId} associated label touch target width`,
+      ).toBeGreaterThanOrEqual(44);
+    }
     const narrowGeometry = await options.evaluate(() => {
       const nav = document.querySelector('.section-nav')!.getBoundingClientRect();
       const workspace = document.querySelector('.workspace')!.getBoundingClientRect();
@@ -468,6 +481,18 @@ test.describe('rewrite records, UI, and original bypass', () => {
     expect(narrowGeometry.hasOverflow).toBe(false);
     expect(narrowGeometry.navWidth).toBeGreaterThan(640);
     expect(narrowGeometry.workspaceTop).toBeGreaterThanOrEqual(narrowGeometry.navBottom - 1);
+
+    await options.setViewportSize({ width: 1440, height: 900 });
+    const excludedLink = options.locator('[data-section-link="excluded"]');
+    await excludedLink.click();
+    await expect.poll(() => options.evaluate(() => {
+      const maxScroll = document.documentElement.scrollHeight - window.innerHeight;
+      return window.scrollY >= maxScroll - 1;
+    })).toBe(true);
+    await options.evaluate(() => new Promise<void>((resolve) => {
+      requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+    }));
+    await expect(excludedLink).toHaveAttribute('aria-current', 'location');
   });
 
   test('loads the packaged options artifact without page or console errors', async ({ extension }) => {
