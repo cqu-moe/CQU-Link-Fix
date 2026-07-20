@@ -21,7 +21,7 @@ export function initializeOptionsNavigation(
   const links = Array.from(
     root.querySelectorAll<HTMLAnchorElement>('[data-section-link]'),
   );
-  const targets = links.flatMap((link) => {
+  const targets: Element[] = links.flatMap((link) => {
     const id = link.dataset.sectionLink;
     const target = id ? root.getElementById(id) : null;
     return target ? [target] : [];
@@ -44,12 +44,23 @@ export function initializeOptionsNavigation(
   };
   for (const link of links) link.addEventListener('click', onClick);
 
+  const visibilityByTarget = new Map(
+    targets.map((target) => [target, { isIntersecting: false, intersectionRatio: 0 }]),
+  );
   const observer = createObserver((entries) => {
-    const winner = entries
-      .filter((entry) => entry.isIntersecting)
-      .sort((left, right) => right.intersectionRatio - left.intersectionRatio)[0];
-    if (winner?.target instanceof HTMLElement) {
-      select(winner.target.id);
+    for (const entry of entries) {
+      if (visibilityByTarget.has(entry.target)) {
+        visibilityByTarget.set(entry.target, {
+          isIntersecting: entry.isIntersecting,
+          intersectionRatio: entry.intersectionRatio,
+        });
+      }
+    }
+    const winner = Array.from(visibilityByTarget.entries())
+      .filter(([, state]) => state.isIntersecting)
+      .sort(([, left], [, right]) => right.intersectionRatio - left.intersectionRatio)[0]?.[0];
+    if (winner instanceof HTMLElement) {
+      select(winner.id);
     }
   });
   for (const target of targets) observer.observe(target);

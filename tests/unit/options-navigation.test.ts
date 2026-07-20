@@ -61,4 +61,33 @@ describe('options section navigation', () => {
     expect(document.querySelector('[data-section-link="built-in"]')?.getAttribute('aria-current'))
       .toBe('location');
   });
+
+  it('keeps the most visible section selected across partial observer callbacks', () => {
+    const callbacks: IntersectionObserverCallback[] = [];
+    const createObserver: SectionObserverFactory = (next) => {
+      callbacks.push(next);
+      return { observe: vi.fn(), disconnect: vi.fn() };
+    };
+    initializeOptionsNavigation(document, createObserver);
+    const overview = document.querySelector('#overview') as Element;
+    const builtIn = document.querySelector('#built-in') as Element;
+
+    callbacks[0]!([
+      { target: overview, isIntersecting: true, intersectionRatio: 0.8 },
+      { target: builtIn, isIntersecting: true, intersectionRatio: 0.2 },
+    ] as IntersectionObserverEntry[], {} as IntersectionObserver);
+    callbacks[0]!([
+      { target: builtIn, isIntersecting: true, intersectionRatio: 0.3 },
+    ] as IntersectionObserverEntry[], {} as IntersectionObserver);
+
+    expect(document.querySelector('[data-section-link="overview"]')?.getAttribute('aria-current'))
+      .toBe('location');
+
+    callbacks[0]!([
+      { target: overview, isIntersecting: false, intersectionRatio: 0 },
+    ] as IntersectionObserverEntry[], {} as IntersectionObserver);
+
+    expect(document.querySelector('[data-section-link="built-in"]')?.getAttribute('aria-current'))
+      .toBe('location');
+  });
 });
