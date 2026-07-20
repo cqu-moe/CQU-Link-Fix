@@ -347,6 +347,18 @@ test.describe('rewrite records, UI, and original bypass', () => {
     });
   });
 
+  test('renders the packaged compact console shell', async ({ extension }) => {
+    const options = await extension.openExtensionPage('options.html', true);
+
+    await expect(options.locator('.app-bar')).toBeVisible();
+    await expect(options.locator('#extension-version')).toHaveText('v0.1.1');
+    await expect(options.locator('#master-state')).toHaveText('运行中');
+    await expect(options.locator('.status-bar #status')).toContainText('设置已加载');
+    await expect(options.locator('.section-nav a')).toHaveCount(4);
+    await expect(options.locator('[data-console-section]')).toHaveCount(4);
+    await expect(options.locator('.masthead')).toHaveCount(0);
+  });
+
   test('loads the packaged options artifact without page or console errors', async ({ extension }) => {
     const options = await extension.openExtensionPage('options.html', true);
     await expect(options).toHaveTitle('CQU Link Fix · 规则管理');

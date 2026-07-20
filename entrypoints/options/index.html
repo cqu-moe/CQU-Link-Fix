@@ -8,57 +8,96 @@
     <meta name="color-scheme" content="light" />
   </head>
   <body>
-    <header class="masthead">
-      <div class="masthead__mark" aria-hidden="true">CQU</div>
-      <div>
-        <p class="eyebrow">LOCAL NAVIGATION UTILITY / 本地导航工具</p>
-        <h1>CQU Link Fix</h1>
-        <p class="lede">管理请求前改写、站点例外与最小主机权限。</p>
+    <header class="app-bar">
+      <a class="brand" href="#overview" aria-label="CQU Link Fix 设置首页">
+        <span class="brand__mark" aria-hidden="true">C</span>
+        <span class="brand__copy">
+          <strong>CQU Link Fix</strong>
+          <span>本地导航控制台</span>
+        </span>
+      </a>
+      <div class="app-bar__meta">
+        <span id="extension-version" class="version-chip">v—</span>
+        <span class="privacy-chip">LOCAL ONLY</span>
+        <span id="master-state" class="master-state" data-tone="muted">正在读取</span>
       </div>
     </header>
 
-    <main>
-      <section class="control-deck" aria-labelledby="global-heading">
+    <div class="status-bar">
+      <span class="status-bar__label">系统状态</span>
+      <span class="status-bar__signal" aria-hidden="true">●</span>
+      <p id="status" role="status" aria-live="polite">正在读取设置…</p>
+    </div>
+
+    <main class="console-layout">
+      <nav class="section-nav" aria-label="设置分区">
+        <p class="section-nav__eyebrow">CONTROL PANEL</p>
+        <a href="#overview" data-section-link="overview" aria-current="location">
+          <span>01</span>概览
+        </a>
+        <a href="#built-in" data-section-link="built-in">
+          <span>02</span>内置规则
+        </a>
+        <a href="#custom" data-section-link="custom">
+          <span>03</span>自定义规则
+        </a>
+        <a href="#excluded" data-section-link="excluded">
+          <span>04</span>暂停站点
+        </a>
+        <p class="section-nav__foot">无遥测 · 无远程规则</p>
+      </nav>
+
+      <div class="workspace">
+      <section id="overview" class="console-section" data-console-section>
         <div class="section-heading">
-          <p class="section-index">01 / GLOBAL</p>
-          <h2 id="global-heading">全局控制</h2>
+          <div>
+            <p class="section-index">01 / OVERVIEW</p>
+            <h1>运行概览</h1>
+          </div>
+          <p>控制链接改写与可选的全校域名访问范围。</p>
         </div>
-        <fieldset class="switch-panel">
-          <legend>扩展状态</legend>
-          <div class="switch-row">
-            <div>
-              <label for="master-enabled">启用链接改写</label>
-              <p>停用后保留全部本地规则，但不执行新的改写。</p>
+        <div class="control-grid">
+          <fieldset class="control-panel control-panel--primary">
+            <legend>全局状态</legend>
+            <div class="switch-row">
+              <div>
+                <label for="master-enabled">启用链接改写</label>
+                <p>停用后保留全部本地规则，但不执行新的改写。</p>
+              </div>
+              <input id="master-enabled" type="checkbox" role="switch" />
             </div>
-            <input id="master-enabled" type="checkbox" role="switch" />
-          </div>
-        </fieldset>
-        <fieldset class="switch-panel switch-panel--accent">
-          <legend>可选权限</legend>
-          <div class="switch-row">
-            <div>
-              <label for="all-cqu-enabled">全部 CQU 域名模式</label>
-              <p>开启时才申请 <code>cqu.edu.cn</code> 与 <code>*.cqu.edu.cn</code> 的可选访问权限。未被学校 aTrust 发布的站点仍可能无法访问。</p>
+          </fieldset>
+          <fieldset class="control-panel">
+            <legend>可选权限</legend>
+            <div class="switch-row">
+              <div>
+                <label for="all-cqu-enabled">全部 CQU 域名模式</label>
+                <p>开启时申请 cqu.edu.cn 与 *.cqu.edu.cn 的访问权限；学校未发布的资源仍可能不可用。</p>
+              </div>
+              <input id="all-cqu-enabled" type="checkbox" role="switch" />
             </div>
-            <input id="all-cqu-enabled" type="checkbox" role="switch" />
-          </div>
-        </fieldset>
+          </fieldset>
+        </div>
       </section>
 
-      <section aria-labelledby="built-in-heading">
+      <section id="built-in" class="console-section" data-console-section>
         <div class="section-heading">
-          <p class="section-index">02 / BUILT-IN</p>
-          <h2 id="built-in-heading">内置规则</h2>
-          <p>规则随扩展发布。关闭内置规则只保存本地覆盖状态。</p>
+          <div>
+            <p class="section-index">02 / BUILT-IN</p>
+            <h2>内置规则</h2>
+          </div>
+          <p>规则随扩展发布；关闭规则只保存本地覆盖状态。</p>
         </div>
         <div id="built-in-groups" class="rule-groups"></div>
       </section>
 
-      <section aria-labelledby="custom-heading">
+      <section id="custom" class="console-section" data-console-section>
         <div class="section-heading">
-          <p class="section-index">03 / LOCAL</p>
-          <h2 id="custom-heading">本地精确规则</h2>
-          <p>首版只接受不带协议、路径、端口或通配符的 CQU DNS 域名。保存前只申请源站与生成目标的精确权限。</p>
+          <div>
+            <p class="section-index">03 / LOCAL</p>
+            <h2>自定义规则</h2>
+          </div>
+          <p>只接受不带协议、路径、端口或通配符的精确 CQU DNS 域名。</p>
         </div>
         <form id="custom-rule-form" class="custom-form" novalidate>
           <label for="custom-host">CQU 域名</label>
@@ -81,24 +120,22 @@
         <div id="custom-list" class="rule-list" aria-label="本地自定义规则"></div>
       </section>
 
-      <section aria-labelledby="excluded-heading">
+      <section id="excluded" class="console-section" data-console-section>
         <div class="section-heading">
-          <p class="section-index">04 / EXCLUSIONS</p>
-          <h2 id="excluded-heading">暂停的站点</h2>
-          <p>这些主机会跳过全部改写。可在弹窗中暂停当前站点。</p>
+          <div>
+            <p class="section-index">04 / EXCLUSIONS</p>
+            <h2>暂停站点</h2>
+          </div>
+          <p>这些主机会跳过全部改写；新的暂停操作从扩展弹窗发起。</p>
         </div>
         <div id="excluded-list" class="excluded-list"></div>
       </section>
-
-      <section class="status-strip" aria-labelledby="status-heading">
-        <h2 id="status-heading">设置状态</h2>
-        <p id="status" role="status" aria-live="polite">正在读取设置…</p>
-      </section>
+      </div>
     </main>
 
-    <footer>
-      <span>CQU LINK FIX / LOCAL ONLY</span>
-      <span>无遥测 · 无远程规则</span>
+    <footer class="page-footer">
+      <span>CQU LINK FIX / LOCAL NAVIGATION UTILITY</span>
+      <span>设置保存在本机</span>
     </footer>
     <script type="module" src="./main.ts"></script>
   </body>

@@ -15,6 +15,11 @@ import {
 
 let started = false;
 
+function showExtensionVersion(): void {
+  const version = document.querySelector('#extension-version');
+  if (version) version.textContent = 'v' + browser.runtime.getManifest().version;
+}
+
 function showStartupFailure(): void {
   const status = document.querySelector('#status');
   if (status) status.textContent = '规则管理页面初始化失败，请刷新后重试。';
@@ -23,6 +28,7 @@ function showStartupFailure(): void {
 function startOptions(): void {
   if (started) return;
   started = true;
+  showExtensionVersion();
   void initializeOptionsController(document, {
     builtInRules: BUILT_IN_RULES,
     getSnapshot: getSettingsSnapshotViaBackground,

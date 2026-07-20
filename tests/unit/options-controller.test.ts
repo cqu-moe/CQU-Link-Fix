@@ -36,6 +36,9 @@ function fixture(): void {
   customSubmit.id = 'custom-submit';
   customSubmit.type = 'submit';
   customForm.append(customInput, customSubmit);
+  const masterState = document.createElement('span');
+  masterState.id = 'master-state';
+  main.append(masterState);
   for (const id of ['custom-list', 'excluded-list', 'status', 'custom-error']) {
     const element = document.createElement('div');
     element.id = id;
@@ -105,9 +108,23 @@ describe('options controller', () => {
     expect(deps.getSnapshot).toHaveBeenCalledOnce();
     expect(deps.getDnrStatus).toHaveBeenCalledOnce();
     expect(checkbox('master-enabled').checked).toBe(true);
+    expect(text('master-state')).toBe('运行中');
+    expect(document.querySelector('#master-state')?.getAttribute('data-tone')).toBe('success');
     expect(document.querySelectorAll('[data-rule-id]').length).toBe(BUILT_IN_RULES.length);
     expect(document.querySelectorAll('[data-rule-group]').length).toBe(4);
     expect(text('status')).toContain('设置已加载');
+  });
+
+  it('renders the paused master state in the app bar summary', async () => {
+    await initializeOptionsController(document, dependencies({
+      getSnapshot: vi.fn().mockResolvedValue(snapshot({
+        ...DEFAULT_SETTINGS,
+        enabled: false,
+      })),
+    }));
+
+    expect(text('master-state')).toBe('已停用');
+    expect(document.querySelector('#master-state')?.getAttribute('data-tone')).toBe('muted');
   });
 
   it('marks a rule that background reconciliation skipped', async () => {

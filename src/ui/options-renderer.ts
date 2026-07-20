@@ -6,6 +6,7 @@ import { buildOptionsModel, type OptionsRuleModel } from './options-model';
 
 export interface OptionsElements {
   master: HTMLInputElement;
+  masterState: HTMLElement;
   allCqu: HTMLInputElement;
   groups: HTMLElement;
   customForm: HTMLFormElement;
@@ -36,6 +37,7 @@ function requireElement<T extends Element>(
 export function getOptionsElements(root: Document): OptionsElements {
   return {
     master: requireElement(root, '#master-enabled', HTMLInputElement),
+    masterState: requireElement(root, '#master-state', HTMLElement),
     allCqu: requireElement(root, '#all-cqu-enabled', HTMLInputElement),
     groups: requireElement(root, '#built-in-groups', HTMLElement),
     customForm: requireElement(root, '#custom-rule-form', HTMLFormElement),
@@ -161,6 +163,8 @@ export function renderOptionsContent(
 ): void {
   if (!snapshot) {
     elements.master.checked = false;
+    elements.masterState.textContent = '状态未知';
+    elements.masterState.dataset.tone = 'muted';
     elements.allCqu.checked = false;
     elements.groups.replaceChildren();
     elements.customList.replaceChildren();
@@ -169,6 +173,8 @@ export function renderOptionsContent(
     return;
   }
   elements.master.checked = snapshot.settings.enabled;
+  elements.masterState.textContent = snapshot.settings.enabled ? '运行中' : '已停用';
+  elements.masterState.dataset.tone = snapshot.settings.enabled ? 'success' : 'muted';
   elements.allCqu.checked = snapshot.settings.enableAllCquDomains;
 
   const model = buildOptionsModel(snapshot.settings, builtInRules, validationErrors);
