@@ -44,6 +44,18 @@ export function initializeOptionsNavigation(
   };
   for (const link of links) link.addEventListener('click', onClick);
 
+  const view = root.defaultView;
+  const selectFinalSectionAtScrollEnd = (): boolean => {
+    if (!view) return false;
+    const maximumScroll = root.documentElement.scrollHeight - view.innerHeight;
+    const finalTarget = targets.at(-1);
+    if (maximumScroll > 0 && view.scrollY >= maximumScroll - 1 && finalTarget) {
+      select(finalTarget.id);
+      return true;
+    }
+    return false;
+  };
+
   const visibilityByTarget = new Map(
     targets.map((target) => [target, { isIntersecting: false, intersectionRatio: 0 }]),
   );
@@ -56,6 +68,7 @@ export function initializeOptionsNavigation(
         });
       }
     }
+    if (selectFinalSectionAtScrollEnd()) return;
     const winner = Array.from(visibilityByTarget.entries())
       .filter(([, state]) => state.isIntersecting)
       .sort(([, left], [, right]) => right.intersectionRatio - left.intersectionRatio)[0]?.[0];
@@ -65,15 +78,6 @@ export function initializeOptionsNavigation(
   });
   for (const target of targets) observer.observe(target);
 
-  const view = root.defaultView;
-  const selectFinalSectionAtScrollEnd = (): void => {
-    if (!view) return;
-    const maximumScroll = root.documentElement.scrollHeight - view.innerHeight;
-    const finalTarget = targets.at(-1);
-    if (maximumScroll > 0 && view.scrollY >= maximumScroll - 1 && finalTarget) {
-      select(finalTarget.id);
-    }
-  };
   view?.addEventListener('scroll', selectFinalSectionAtScrollEnd, { passive: true });
 
   return () => {

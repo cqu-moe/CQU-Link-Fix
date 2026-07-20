@@ -92,10 +92,11 @@ describe('options section navigation', () => {
   });
 
   it('selects the final section when scrolling reaches the document end', () => {
-    const createObserver: SectionObserverFactory = () => ({
-      observe: vi.fn(),
-      disconnect: vi.fn(),
-    });
+    const callbacks: IntersectionObserverCallback[] = [];
+    const createObserver: SectionObserverFactory = (next) => {
+      callbacks.push(next);
+      return { observe: vi.fn(), disconnect: vi.fn() };
+    };
     Object.defineProperty(window, 'innerHeight', { configurable: true, value: 900 });
     Object.defineProperty(window, 'scrollY', { configurable: true, value: 600 });
     Object.defineProperty(document.documentElement, 'scrollHeight', {
@@ -103,11 +104,24 @@ describe('options section navigation', () => {
       value: 1500,
     });
     const dispose = initializeOptionsNavigation(document, createObserver);
+    const overview = document.querySelector('#overview') as Element;
+    const builtIn = document.querySelector('#built-in') as Element;
 
     window.dispatchEvent(new Event('scroll'));
+    callbacks[0]!([
+      { target: overview, isIntersecting: true, intersectionRatio: 0.8 },
+      { target: builtIn, isIntersecting: false, intersectionRatio: 0 },
+    ] as IntersectionObserverEntry[], {} as IntersectionObserver);
 
     expect(document.querySelector('[data-section-link="built-in"]')?.getAttribute('aria-current'))
       .toBe('location');
     dispose();
+
+    const overviewLink = document.querySelector('[data-section-link="overview"]')!;
+    overviewLink.setAttribute('aria-current', 'location');
+    document.querySelector('[data-section-link="built-in"]')?.removeAttribute('aria-current');
+    window.dispatchEvent(new Event('scroll'));
+
+    expect(overviewLink.getAttribute('aria-current')).toBe('location');
   });
 });
