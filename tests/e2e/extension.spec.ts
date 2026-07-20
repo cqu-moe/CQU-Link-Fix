@@ -355,7 +355,11 @@ test.describe('rewrite records, UI, and original bypass', () => {
     await expect(options.locator('#master-state')).toHaveText('运行中');
     await expect(options.locator('.status-bar #status')).toContainText('设置已加载');
     await expect(options.locator('.section-nav a')).toHaveCount(4);
-    await expect(options.locator('[data-console-section]')).toHaveCount(4);
+    const sections = options.locator('[data-console-section]');
+    await expect(sections).toHaveCount(4);
+    for (const [index, name] of ['运行概览', '内置规则', '自定义规则', '暂停站点'].entries()) {
+      await expect(sections.nth(index)).toHaveAccessibleName(name);
+    }
     await expect(options.locator('.masthead')).toHaveCount(0);
   });
 

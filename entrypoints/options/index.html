@@ -48,11 +48,11 @@
       </nav>
 
       <div class="workspace">
-      <section id="overview" class="console-section" data-console-section>
+      <section id="overview" class="console-section" data-console-section aria-labelledby="overview-heading">
         <div class="section-heading">
           <div>
             <p class="section-index">01 / OVERVIEW</p>
-            <h1>运行概览</h1>
+            <h1 id="overview-heading">运行概览</h1>
           </div>
           <p>控制链接改写与可选的全校域名访问范围。</p>
         </div>
@@ -80,22 +80,22 @@
         </div>
       </section>
 
-      <section id="built-in" class="console-section" data-console-section>
+      <section id="built-in" class="console-section" data-console-section aria-labelledby="built-in-heading">
         <div class="section-heading">
           <div>
             <p class="section-index">02 / BUILT-IN</p>
-            <h2>内置规则</h2>
+            <h2 id="built-in-heading">内置规则</h2>
           </div>
           <p>规则随扩展发布；关闭规则只保存本地覆盖状态。</p>
         </div>
         <div id="built-in-groups" class="rule-groups"></div>
       </section>
 
-      <section id="custom" class="console-section" data-console-section>
+      <section id="custom" class="console-section" data-console-section aria-labelledby="custom-heading">
         <div class="section-heading">
           <div>
             <p class="section-index">03 / LOCAL</p>
-            <h2>自定义规则</h2>
+            <h2 id="custom-heading">自定义规则</h2>
           </div>
           <p>只接受不带协议、路径、端口或通配符的精确 CQU DNS 域名。</p>
         </div>
@@ -120,11 +120,11 @@
         <div id="custom-list" class="rule-list" aria-label="本地自定义规则"></div>
       </section>
 
-      <section id="excluded" class="console-section" data-console-section>
+      <section id="excluded" class="console-section" data-console-section aria-labelledby="excluded-heading">
         <div class="section-heading">
           <div>
             <p class="section-index">04 / EXCLUSIONS</p>
-            <h2>暂停站点</h2>
+            <h2 id="excluded-heading">暂停站点</h2>
           </div>
           <p>这些主机会跳过全部改写；新的暂停操作从扩展弹窗发起。</p>
         </div>
