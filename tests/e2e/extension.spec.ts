@@ -347,6 +347,17 @@ test.describe('rewrite records, UI, and original bypass', () => {
     });
   });
 
+  test('opens options in a dedicated tab through the Chrome API', async ({ extension }) => {
+    const optionsUrl = `chrome-extension://${extension.extensionId}/options.html`;
+
+    await extension.worker.evaluate(() => chrome.runtime.openOptionsPage());
+
+    await expect.poll(
+      () => extension.context.pages().map((page) => page.url()),
+      { message: 'Chrome opens the options page as a dedicated extension tab' },
+    ).toContain(optionsUrl);
+  });
+
   test('renders the packaged compact console shell', async ({ extension }) => {
     const options = await extension.openExtensionPage('options.html', true);
 
