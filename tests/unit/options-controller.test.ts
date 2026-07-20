@@ -496,6 +496,8 @@ describe('options controller', () => {
 
     expect(deps.replaceSettings).not.toHaveBeenCalled();
     expect(text('custom-error')).toContain('未授予');
+    expect(text('status')).toContain('未授予');
+    expect(document.querySelector('#status')?.getAttribute('data-tone')).toBe('error');
   });
 
   it('guards a double submit while custom permission acquisition is pending', async () => {

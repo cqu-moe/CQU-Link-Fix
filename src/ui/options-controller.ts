@@ -281,6 +281,7 @@ export async function initializeOptionsController(
       return;
     }
 
+    let settingsWriteStarted = false;
     const addition = beginCustomRuleAddition(
       elements.customHost.value,
       nextDnrId,
@@ -288,6 +289,7 @@ export async function initializeOptionsController(
       dependencies,
       async (rule) => {
         if (!saved) return 'failure';
+        settingsWriteStarted = true;
         setStatus('正在保存…');
         const result = await commit({
           ...toEditableSettings(saved.settings),
@@ -308,6 +310,7 @@ export async function initializeOptionsController(
       .then((result) => {
         if (result.clearInput) elements.customHost.value = '';
         elements.customError.textContent = result.error ?? '';
+        if (result.error && !settingsWriteStarted) setStatus(result.error, 'error');
       })
       .finally(() => {
         pending = false;
