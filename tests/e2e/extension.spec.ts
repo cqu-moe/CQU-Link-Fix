@@ -363,6 +363,46 @@ test.describe('rewrite records, UI, and original bypass', () => {
     await expect(options.locator('.masthead')).toHaveCount(0);
   });
 
+  test('lays out the console without narrow-screen overflow', async ({ extension }) => {
+    const options = await extension.openExtensionPage('options.html', true);
+    await expect(options.locator('#status')).toContainText('设置已加载');
+
+    await options.setViewportSize({ width: 1440, height: 900 });
+    const appBarPosition = await options.locator('.app-bar').evaluate(
+      (element) => getComputedStyle(element).position,
+    );
+    const navigationPosition = await options.locator('.section-nav').evaluate(
+      (element) => getComputedStyle(element).position,
+    );
+    const desktopNav = await options.locator('.section-nav').boundingBox();
+    const desktopWorkspace = await options.locator('.workspace').boundingBox();
+    expect(appBarPosition).toBe('sticky');
+    expect(navigationPosition).toBe('sticky');
+    expect(desktopNav).not.toBeNull();
+    expect(desktopWorkspace).not.toBeNull();
+    expect(desktopWorkspace!.x).toBeGreaterThan(desktopNav!.x + desktopNav!.width);
+
+    await options.setViewportSize({ width: 1024, height: 900 });
+    expect(await options.evaluate(
+      () => document.documentElement.scrollWidth > document.documentElement.clientWidth,
+    )).toBe(false);
+
+    await options.setViewportSize({ width: 700, height: 900 });
+    const narrowGeometry = await options.evaluate(() => {
+      const nav = document.querySelector('.section-nav')!.getBoundingClientRect();
+      const workspace = document.querySelector('.workspace')!.getBoundingClientRect();
+      return {
+        hasOverflow: document.documentElement.scrollWidth > document.documentElement.clientWidth,
+        navWidth: nav.width,
+        workspaceTop: workspace.top,
+        navBottom: nav.bottom,
+      };
+    });
+    expect(narrowGeometry.hasOverflow).toBe(false);
+    expect(narrowGeometry.navWidth).toBeGreaterThan(640);
+    expect(narrowGeometry.workspaceTop).toBeGreaterThanOrEqual(narrowGeometry.navBottom - 1);
+  });
+
   test('loads the packaged options artifact without page or console errors', async ({ extension }) => {
     const options = await extension.openExtensionPage('options.html', true);
     await expect(options).toHaveTitle('CQU Link Fix · 规则管理');
