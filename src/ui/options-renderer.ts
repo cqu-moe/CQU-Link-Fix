@@ -102,31 +102,55 @@ function renderRuleToggle(
   return input;
 }
 
+type RuleRowState = 'enabled' | 'disabled' | 'locked' | 'error';
+
+function ruleRowState(rule: OptionsRuleModel): {
+  state: RuleRowState;
+  label: string;
+} {
+  if (rule.validationError) return { state: 'error', label: '未加载' };
+  if (rule.locked) return { state: 'locked', label: '版本锁定' };
+  if (rule.enabled) return { state: 'enabled', label: '已启用' };
+  return { state: 'disabled', label: '已停用' };
+}
+
 function renderRuleCard(
   root: Document,
   rule: OptionsRuleModel,
   handlers: OptionsRenderHandlers,
 ): HTMLElement {
   const isCustom = rule.category === 'custom';
+  const presentation = ruleRowState(rule);
   const article = root.createElement('article');
-  article.className = 'rule-card';
-  const header = root.createElement('div');
-  header.className = 'rule-card__header';
-  const label = root.createElement('label');
+  article.className = 'rule-row';
+  article.dataset.state = presentation.state;
+
+  const lead = root.createElement('div');
+  lead.className = 'rule-row__lead';
   const input = renderRuleToggle(root, rule, handlers);
+  const label = root.createElement('label');
   label.htmlFor = input.id;
   label.textContent = rule.name;
-  header.append(label, input);
+  lead.append(input, label);
+
   const description = root.createElement('p');
+  description.className = 'rule-row__description';
   description.textContent = rule.description;
+
   const range = root.createElement('code');
+  range.className = 'rule-row__range';
   range.textContent = matcherRangeLabel(rule.matcher);
-  article.append(header, description, range);
+
+  const state = root.createElement('span');
+  state.className = 'rule-state';
+  state.textContent = presentation.label;
+  article.append(lead, description, range, state);
+
   if (rule.validationError) {
     const validationError = root.createElement('p');
     validationError.className = 'rule-validation-error';
     validationError.dataset.ruleValidationErrorFor = rule.id;
-    validationError.textContent = `规则未加载：${rule.validationError}`;
+    validationError.textContent = '规则未加载：' + rule.validationError;
     article.append(validationError);
   }
   if (rule.locked && rule.lockReason) {
@@ -143,8 +167,8 @@ function renderRuleCard(
     remove.type = 'button';
     remove.className = 'danger-button';
     remove.dataset.deleteCustom = rule.id;
-    remove.textContent = '删除规则';
-    remove.setAttribute('aria-label', `删除自定义规则 ${rule.name}`);
+    remove.textContent = '删除';
+    remove.setAttribute('aria-label', '删除自定义规则 ' + rule.name);
     remove.addEventListener('click', () => handlers.deleteCustomRule(rule));
     article.append(remove);
   }

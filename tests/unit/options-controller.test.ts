@@ -112,6 +112,9 @@ describe('options controller', () => {
     expect(document.querySelector('#master-state')?.getAttribute('data-tone')).toBe('success');
     expect(document.querySelectorAll('[data-rule-id]').length).toBe(BUILT_IN_RULES.length);
     expect(document.querySelectorAll('[data-rule-group]').length).toBe(4);
+    const enabledRow = document.querySelector('[data-rule-id="core-sso"]')?.closest('.rule-row');
+    expect(enabledRow?.getAttribute('data-state')).toBe('enabled');
+    expect(enabledRow?.querySelector('.rule-state')?.textContent).toBe('已启用');
     expect(text('status')).toContain('设置已加载');
   });
 
@@ -137,6 +140,22 @@ describe('options controller', () => {
     const error = document.querySelector('[data-rule-validation-error-for="core-sso"]');
     expect(error?.textContent).toContain('syntaxError');
     expect(error?.textContent).toContain('未加载');
+    const failedRow = error?.closest('.rule-row');
+    expect(failedRow?.getAttribute('data-state')).toBe('error');
+    expect(failedRow?.querySelector('.rule-state')?.textContent).toBe('未加载');
+  });
+
+  it('renders a disabled built-in as a compact paused row', async () => {
+    await initializeOptionsController(document, dependencies({
+      getSnapshot: vi.fn().mockResolvedValue(snapshot({
+        ...DEFAULT_SETTINGS,
+        disabledRuleIds: ['core-sso'],
+      })),
+    }));
+
+    const row = document.querySelector('[data-rule-id="core-sso"]')?.closest('.rule-row');
+    expect(row?.getAttribute('data-state')).toBe('disabled');
+    expect(row?.querySelector('.rule-state')?.textContent).toBe('已停用');
   });
 
   it('renders a default-off built-in as a locked accessible control that pending state cannot unlock', async () => {
@@ -156,6 +175,9 @@ describe('options controller', () => {
     const explanation = document.querySelector('[data-lock-reason-for="default-disabled"]');
     expect(explanation?.textContent).toContain('默认关闭');
     expect(locked.getAttribute('aria-describedby')).toBe(explanation?.id);
+    const lockedRow = locked.closest('.rule-row');
+    expect(lockedRow?.getAttribute('data-state')).toBe('locked');
+    expect(lockedRow?.querySelector('.rule-state')?.textContent).toBe('版本锁定');
     locked.click();
     expect(deps.replaceSettings).not.toHaveBeenCalled();
 
