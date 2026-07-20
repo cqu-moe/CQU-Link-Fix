@@ -140,6 +140,9 @@ describe('options controller', () => {
     const error = document.querySelector('[data-rule-validation-error-for="core-sso"]');
     expect(error?.textContent).toContain('syntaxError');
     expect(error?.textContent).toContain('未加载');
+    const failedToggle = document.querySelector('[data-rule-id="core-sso"]');
+    expect(error?.id).not.toBe('');
+    expect(failedToggle?.getAttribute('aria-describedby')).toContain(error?.id);
     const failedRow = error?.closest('.rule-row');
     expect(failedRow?.getAttribute('data-state')).toBe('error');
     expect(failedRow?.querySelector('.rule-state')?.textContent).toBe('未加载');
@@ -213,6 +216,7 @@ describe('options controller', () => {
 
     expect(deps.replaceSettings).toHaveBeenCalledOnce();
     expect(checkbox('master-enabled').disabled).toBe(true);
+    expect(text('status')).toContain('正在保存');
     resolve({ ok: false, code: 'operation-failed', error: '保存失败' });
     await settle();
 
@@ -315,6 +319,7 @@ describe('options controller', () => {
     checkbox('all-cqu-enabled').click();
 
     expect(calls).toEqual(['set-mode']);
+    expect(text('status')).toContain('正在申请权限');
     await settle();
     expect(calls).toEqual(['set-mode', 'reload']);
     expect(checkbox('all-cqu-enabled').checked).toBe(true);
@@ -505,9 +510,28 @@ describe('options controller', () => {
     await vi.waitFor(() => expect(deps.requestPermission).toHaveBeenCalledOnce());
 
     expect(button('custom-submit').disabled).toBe(true);
+    expect(text('status')).toContain('正在申请权限');
     resolveRequest(true);
     await settle();
     expect(deps.replaceSettings).toHaveBeenCalledOnce();
+  });
+
+  it('announces saving after custom permission succeeds and the settings write begins', async () => {
+    let resolveSave!: (result: ReplaceSettingsResult) => void;
+    const save = new Promise<ReplaceSettingsResult>((resolve) => { resolveSave = resolve; });
+    const deps = dependencies({
+      requestPermission: vi.fn().mockResolvedValue(true),
+      replaceSettings: vi.fn().mockReturnValue(save),
+    });
+    await initializeOptionsController(document, deps);
+    (document.querySelector('#custom-host') as HTMLInputElement).value = 'library.cqu.edu.cn';
+
+    button('custom-submit').click();
+    await vi.waitFor(() => expect(deps.replaceSettings).toHaveBeenCalledOnce());
+
+    expect(text('status')).toContain('正在保存');
+    resolveSave({ ok: true, revision: 4 });
+    await settle();
   });
 
   it('does not persist a rule when a concurrent cleanup removes the grant before commit', async () => {

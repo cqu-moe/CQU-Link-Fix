@@ -16,6 +16,7 @@
   --green-wash: #e1eee6;
   --amber: #7b5414;
   --amber-wash: #f6ead0;
+  --focus: #00789e;
   --shadow: 0 16px 42px rgba(36, 29, 22, 0.08);
   --app-bar-height: 72px;
 }
@@ -59,7 +60,7 @@ input:disabled {
 button:focus-visible,
 input:focus-visible,
 a:focus-visible {
-  outline: 3px solid #176a86;
+  outline: 3px solid var(--focus);
   outline-offset: 3px;
 }
 
@@ -480,14 +481,14 @@ input[type="checkbox"] {
   color: var(--amber);
 }
 
-.rule-validation-error,
+[data-rule-validation-error-for],
 .rule-lock-reason {
   grid-column: 2 / -1;
   margin: -6px 0 3px;
   font-size: 11px;
 }
 
-.rule-validation-error {
+[data-rule-validation-error-for] {
   color: var(--red-dark);
   font-weight: 700;
 }
@@ -529,6 +530,8 @@ button:hover:not(:disabled) {
 }
 
 .danger-button {
+  grid-column: 5;
+  grid-row: 1;
   justify-self: end;
   min-width: 44px;
   min-height: 44px;
@@ -633,7 +636,7 @@ button:hover:not(:disabled) {
 
   .rule-row__description,
   .rule-row__range,
-  .rule-validation-error,
+  [data-rule-validation-error-for],
   .rule-lock-reason {
     grid-column: 1 / -1;
   }

@@ -123,6 +123,7 @@ function renderRuleCard(
   const presentation = ruleRowState(rule);
   const article = root.createElement('article');
   article.className = 'rule-row';
+  article.dataset.ruleRowFor = rule.id;
   article.dataset.state = presentation.state;
 
   const lead = root.createElement('div');
@@ -148,9 +149,11 @@ function renderRuleCard(
 
   if (rule.validationError) {
     const validationError = root.createElement('p');
+    validationError.id = checkboxId('rule-validation-error', rule.id);
     validationError.className = 'rule-validation-error';
     validationError.dataset.ruleValidationErrorFor = rule.id;
     validationError.textContent = '规则未加载：' + rule.validationError;
+    input.setAttribute('aria-describedby', validationError.id);
     article.append(validationError);
   }
   if (rule.locked && rule.lockReason) {
@@ -159,7 +162,8 @@ function renderRuleCard(
     lockReason.className = 'rule-lock-reason';
     lockReason.dataset.lockReasonFor = rule.id;
     lockReason.textContent = rule.lockReason;
-    input.setAttribute('aria-describedby', lockReason.id);
+    const describedBy = input.getAttribute('aria-describedby');
+    input.setAttribute('aria-describedby', [describedBy, lockReason.id].filter(Boolean).join(' '));
     article.append(lockReason);
   }
   if (isCustom) {

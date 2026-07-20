@@ -8,8 +8,8 @@
     <meta name="color-scheme" content="light" />
   </head>
   <body>
-    <header class="app-bar">
-      <a class="brand" href="#overview" aria-label="CQU Link Fix 设置首页">
+    <header class="app-bar" data-console-app-bar>
+      <a class="brand" href="#overview" aria-label="CQU Link Fix 设置首页" data-console-brand>
         <span class="brand__mark" aria-hidden="true">C</span>
         <span class="brand__copy">
           <strong>CQU Link Fix</strong>
@@ -30,7 +30,7 @@
     </div>
 
     <main class="console-layout">
-      <nav class="section-nav" aria-label="设置分区">
+      <nav class="section-nav" aria-label="设置分区" data-console-navigation>
         <p class="section-nav__eyebrow">CONTROL PANEL</p>
         <a href="#overview" data-section-link="overview" aria-current="location">
           <span>01</span>概览
@@ -47,7 +47,7 @@
         <p class="section-nav__foot">无遥测 · 无远程规则</p>
       </nav>
 
-      <div class="workspace">
+      <div class="workspace" data-console-workspace>
       <section id="overview" class="console-section" data-console-section aria-labelledby="overview-heading">
         <div class="section-heading">
           <div>

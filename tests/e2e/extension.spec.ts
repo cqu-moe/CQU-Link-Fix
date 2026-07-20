@@ -350,17 +350,16 @@ test.describe('rewrite records, UI, and original bypass', () => {
   test('renders the packaged compact console shell', async ({ extension }) => {
     const options = await extension.openExtensionPage('options.html', true);
 
-    await expect(options.locator('.app-bar')).toBeVisible();
+    await expect(options.locator('[data-console-app-bar]')).toBeVisible();
     await expect(options.locator('#extension-version')).toHaveText('v0.1.1');
     await expect(options.locator('#master-state')).toHaveText('运行中');
-    await expect(options.locator('.status-bar #status')).toContainText('设置已加载');
-    await expect(options.locator('.section-nav a')).toHaveCount(4);
+    await expect(options.locator('#status')).toContainText('设置已加载');
+    await expect(options.locator('[data-section-link]')).toHaveCount(4);
     const sections = options.locator('[data-console-section]');
     await expect(sections).toHaveCount(4);
     for (const [index, name] of ['运行概览', '内置规则', '自定义规则', '暂停站点'].entries()) {
       await expect(sections.nth(index)).toHaveAccessibleName(name);
     }
-    await expect(options.locator('.masthead')).toHaveCount(0);
   });
 
   test('lays out the console without narrow-screen overflow', async ({ extension }) => {
@@ -390,22 +389,81 @@ test.describe('rewrite records, UI, and original bypass', () => {
     });
     await options.reload();
     await expect(options.locator('#status')).toContainText('设置已加载');
-    await expect(options.locator('#custom-list .rule-row')).toContainText('library.cqu.edu.cn');
+    await expect(options.locator('[data-rule-row-for="geometry-custom"]'))
+      .toContainText('library.cqu.edu.cn');
 
     await options.setViewportSize({ width: 1440, height: 900 });
-    const appBarPosition = await options.locator('.app-bar').evaluate(
+    const appBarPosition = await options.locator('[data-console-app-bar]').evaluate(
       (element) => getComputedStyle(element).position,
     );
-    const navigationPosition = await options.locator('.section-nav').evaluate(
+    const navigationPosition = await options.locator('[data-console-navigation]').evaluate(
       (element) => getComputedStyle(element).position,
     );
-    const desktopNav = await options.locator('.section-nav').boundingBox();
-    const desktopWorkspace = await options.locator('.workspace').boundingBox();
+    const desktopNav = await options.locator('[data-console-navigation]').boundingBox();
+    const desktopWorkspace = await options.locator('[data-console-workspace]').boundingBox();
     expect(appBarPosition).toBe('sticky');
     expect(navigationPosition).toBe('sticky');
     expect(desktopNav).not.toBeNull();
     expect(desktopWorkspace).not.toBeNull();
     expect(desktopWorkspace!.x).toBeGreaterThan(desktopNav!.x + desktopNav!.width);
+
+    const focusContrast = await options.locator('[data-console-brand]').evaluate((element) => {
+      const parse = (value: string): [number, number, number, number] => {
+        const parts = value.match(/[\d.]+/g)?.map(Number) ?? [];
+        return [parts[0] ?? 0, parts[1] ?? 0, parts[2] ?? 0, parts[3] ?? 1];
+      };
+      const composite = (
+        foreground: [number, number, number, number],
+        background: [number, number, number, number],
+      ): [number, number, number, number] => {
+        const alpha = foreground[3];
+        return [
+          foreground[0] * alpha + background[0] * (1 - alpha),
+          foreground[1] * alpha + background[1] * (1 - alpha),
+          foreground[2] * alpha + background[2] * (1 - alpha),
+          1,
+        ];
+      };
+      const luminance = (color: [number, number, number, number]): number =>
+        [color[0], color[1], color[2]]
+          .map((channel) => {
+            const normalized = channel / 255;
+            return normalized <= 0.04045
+              ? normalized / 12.92
+              : ((normalized + 0.055) / 1.055) ** 2.4;
+          })
+          .reduce((total, channel, index) =>
+            total + channel * [0.2126, 0.7152, 0.0722][index]!, 0);
+      (element as HTMLElement).focus();
+      const outline = parse(getComputedStyle(element).outlineColor);
+      const appBar = parse(getComputedStyle(element.closest('[data-console-app-bar]')!).backgroundColor);
+      const page = parse(getComputedStyle(document.body).backgroundColor);
+      const background = composite(appBar, page);
+      const lighter = Math.max(luminance(outline), luminance(background));
+      const darker = Math.min(luminance(outline), luminance(background));
+      return (lighter + 0.05) / (darker + 0.05);
+    });
+    expect(focusContrast).toBeGreaterThanOrEqual(3);
+
+    await options.evaluate(() => {
+      const row = document.querySelector('[data-rule-row-for="geometry-custom"]');
+      const remove = row?.querySelector('[data-delete-custom="geometry-custom"]');
+      if (!row || !remove) throw new Error('Missing custom rule geometry hooks');
+      const error = document.createElement('p');
+      error.dataset.ruleValidationErrorFor = 'geometry-custom';
+      error.textContent = '规则未加载：geometry fixture';
+      row.insertBefore(error, remove);
+    });
+    const customToggleBox = await options.locator('[data-custom-rule-id="geometry-custom"]')
+      .boundingBox();
+    const desktopDeleteBox = await options.locator('[data-delete-custom="geometry-custom"]')
+      .boundingBox();
+    expect(customToggleBox).not.toBeNull();
+    expect(desktopDeleteBox).not.toBeNull();
+    expect(Math.abs(
+      customToggleBox!.y + customToggleBox!.height / 2 -
+      (desktopDeleteBox!.y + desktopDeleteBox!.height / 2),
+    )).toBeLessThanOrEqual(1);
 
     await options.setViewportSize({ width: 1024, height: 900 });
     expect(await options.evaluate(
@@ -416,9 +474,11 @@ test.describe('rewrite records, UI, and original bypass', () => {
       await options.setViewportSize({ width, height: 900 });
       const geometry = await options.evaluate(() => {
         const rows = [...document.querySelectorAll<HTMLElement>(
-          '#built-in-groups .rule-row, #custom-list .rule-row',
+          '[data-rule-row-for]',
         )].filter((row) => row.getClientRects().length > 0);
-        const customRow = document.querySelector<HTMLElement>('#custom-list .rule-row');
+        const customRow = document.querySelector<HTMLElement>(
+          '[data-rule-row-for="geometry-custom"]',
+        );
         return {
           hasOverflow: document.documentElement.scrollWidth > document.documentElement.clientWidth,
           customGridTrackCount: customRow
@@ -430,7 +490,7 @@ test.describe('rewrite records, UI, and original bypass', () => {
           })),
         };
       });
-      const deleteButton = options.locator('#custom-list .danger-button');
+      const deleteButton = options.locator('[data-delete-custom="geometry-custom"]');
       await expect(deleteButton).toBeVisible();
       const deleteButtonBox = await deleteButton.boundingBox();
       expect(deleteButtonBox).not.toBeNull();
@@ -469,8 +529,8 @@ test.describe('rewrite records, UI, and original bypass', () => {
       ).toBeGreaterThanOrEqual(44);
     }
     const narrowGeometry = await options.evaluate(() => {
-      const nav = document.querySelector('.section-nav')!.getBoundingClientRect();
-      const workspace = document.querySelector('.workspace')!.getBoundingClientRect();
+      const nav = document.querySelector('[data-console-navigation]')!.getBoundingClientRect();
+      const workspace = document.querySelector('[data-console-workspace]')!.getBoundingClientRect();
       return {
         hasOverflow: document.documentElement.scrollWidth > document.documentElement.clientWidth,
         navWidth: nav.width,
