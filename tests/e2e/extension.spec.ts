@@ -412,14 +412,18 @@ test.describe('rewrite records, UI, and original bypass', () => {
       () => document.documentElement.scrollWidth > document.documentElement.clientWidth,
     )).toBe(false);
 
-    for (const width of [800, 769]) {
+    for (const width of [1121, 1100, 1075, 1041, 800, 769]) {
       await options.setViewportSize({ width, height: 900 });
       const geometry = await options.evaluate(() => {
         const rows = [...document.querySelectorAll<HTMLElement>(
           '#built-in-groups .rule-row, #custom-list .rule-row',
         )].filter((row) => row.getClientRects().length > 0);
+        const customRow = document.querySelector<HTMLElement>('#custom-list .rule-row');
         return {
           hasOverflow: document.documentElement.scrollWidth > document.documentElement.clientWidth,
+          customGridTrackCount: customRow
+            ? getComputedStyle(customRow).gridTemplateColumns.split(/\s+/).length
+            : 0,
           rows: rows.map((row) => ({
             clientWidth: row.clientWidth,
             scrollWidth: row.scrollWidth,
@@ -434,6 +438,10 @@ test.describe('rewrite records, UI, and original bypass', () => {
         deleteButtonBox!.height,
         `${width}px custom delete touch target`,
       ).toBeGreaterThanOrEqual(44);
+      expect.soft(
+        deleteButtonBox!.width,
+        `${width}px custom delete touch target`,
+      ).toBeGreaterThanOrEqual(44);
 
       expect.soft(geometry.hasOverflow, `${width}px document overflow`).toBe(false);
       expect(geometry.rows.length).toBeGreaterThan(1);
@@ -443,6 +451,7 @@ test.describe('rewrite records, UI, and original bypass', () => {
           `${width}px rule row ${index + 1} clips content`,
         ).toBeLessThanOrEqual(row.clientWidth);
       }
+      if (width === 1121) expect(geometry.customGridTrackCount).toBe(5);
     }
 
     await options.setViewportSize({ width: 700, height: 900 });

@@ -523,12 +523,14 @@ button:hover:not(:disabled) {
 
 .danger-button {
   justify-self: end;
+  min-width: 44px;
   min-height: 44px;
   padding: 6px 10px;
   border-color: var(--red);
   background: transparent;
   color: var(--red-dark);
   font-size: 11px;
+  white-space: nowrap;
 }
 
 .rule-list,
@@ -586,7 +588,7 @@ button:hover:not(:disabled) {
   font-size: 9px;
 }
 
-@media (max-width: 1040px) {
+@media (max-width: 1120px) {
   .rule-row {
     grid-template-columns: minmax(170px, 1fr) minmax(180px, 1.2fr) 72px auto;
   }
