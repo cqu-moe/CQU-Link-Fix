@@ -359,10 +359,12 @@ test.describe('rewrite records, UI, and original bypass', () => {
   });
 
   test('renders the packaged compact console shell', async ({ extension }) => {
+    const manifestPath = resolve(process.cwd(), '.output/chrome-mv3/manifest.json');
+    const manifest = JSON.parse(await readFile(manifestPath, 'utf8')) as { version: string };
     const options = await extension.openExtensionPage('options.html', true);
 
     await expect(options.locator('[data-console-app-bar]')).toBeVisible();
-    await expect(options.locator('#extension-version')).toHaveText('v0.2.0');
+    await expect(options.locator('#extension-version')).toHaveText(`v${manifest.version}`);
     await expect(options.locator('#master-state')).toHaveText('运行中');
     await expect(options.locator('#status')).toContainText('设置已加载');
     await expect(options.locator('[data-section-link]')).toHaveCount(4);
