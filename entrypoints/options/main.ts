@@ -6,6 +6,7 @@ import {
 } from '../../src/storage/settings-client';
 import { setAllCquMode } from '../../src/storage/settings-permissions';
 import { initializeOptionsController } from '../../src/ui/options-controller';
+import { initializeOptionsNavigation } from '../../src/ui/options-navigation';
 import { getDnrStatusViaBackground } from '../../src/ui/dnr-status-client';
 import {
   acquireCustomPermissionLeaseViaBackground,
@@ -29,6 +30,8 @@ function startOptions(): void {
   if (started) return;
   started = true;
   showExtensionVersion();
+  const disposeNavigation = initializeOptionsNavigation(document);
+  window.addEventListener('pagehide', disposeNavigation, { once: true });
   void initializeOptionsController(document, {
     builtInRules: BUILT_IN_RULES,
     getSnapshot: getSettingsSnapshotViaBackground,
