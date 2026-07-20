@@ -1,5 +1,8 @@
 /// <reference types="chrome" />
 
+import { readFile } from 'node:fs/promises';
+import { resolve } from 'node:path';
+
 import {
   activeTabId,
   expect,
@@ -330,6 +333,18 @@ test.describe('rewrite records, UI, and original bypass', () => {
 
     await reloadWithBackgroundRedirect(page);
     await expect.poll(() => page.url()).toBe(rewritten);
+  });
+
+  test('packages options as a dedicated browser tab', async () => {
+    const manifestPath = resolve(process.cwd(), '.output/chrome-mv3/manifest.json');
+    const manifest = JSON.parse(await readFile(manifestPath, 'utf8')) as {
+      options_ui?: { page?: string; open_in_tab?: boolean };
+    };
+
+    expect(manifest.options_ui).toEqual({
+      page: 'options.html',
+      open_in_tab: true,
+    });
   });
 
   test('loads the packaged options artifact without page or console errors', async ({ extension }) => {
