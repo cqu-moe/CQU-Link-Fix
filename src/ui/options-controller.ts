@@ -172,6 +172,7 @@ export async function initializeOptionsController(
   ): void => {
     if (pending || !saved) return;
     pending = true;
+    setStatus('正在保存…');
     renderControls();
     const candidate = mutate(toEditableSettings(saved.settings));
     void commit(candidate, successMessage)
@@ -227,6 +228,7 @@ export async function initializeOptionsController(
     if (pending || !saved) return;
     const requested = elements.allCqu.checked;
     pending = true;
+    setStatus('正在申请权限…');
     renderControls();
     // This call intentionally occurs synchronously inside the user click handler.
     let permissionOperation: Promise<boolean>;
@@ -279,6 +281,7 @@ export async function initializeOptionsController(
       return;
     }
 
+    let settingsWriteStarted = false;
     const addition = beginCustomRuleAddition(
       elements.customHost.value,
       nextDnrId,
@@ -286,6 +289,8 @@ export async function initializeOptionsController(
       dependencies,
       async (rule) => {
         if (!saved) return 'failure';
+        settingsWriteStarted = true;
+        setStatus('正在保存…');
         const result = await commit({
           ...toEditableSettings(saved.settings),
           customRules: [...saved.settings.customRules, rule],
@@ -299,11 +304,13 @@ export async function initializeOptionsController(
     }
 
     pending = true;
+    setStatus('正在申请权限…');
     renderControls();
     void addition.completion
       .then((result) => {
         if (result.clearInput) elements.customHost.value = '';
         elements.customError.textContent = result.error ?? '';
+        if (result.error && !settingsWriteStarted) setStatus(result.error, 'error');
       })
       .finally(() => {
         pending = false;

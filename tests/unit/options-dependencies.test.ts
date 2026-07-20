@@ -44,4 +44,18 @@ describe('settings UI dependency boundary', () => {
     expect(source).toMatch(/origins:\s*CustomPermissionOriginPair/);
     expect(source).not.toMatch(/interface ExactOriginPermission\s*{\s*origins:\s*string\[\]/s);
   });
+
+  it('keeps section observation outside the settings controller', async () => {
+    const controller = await readFile(
+      resolve(process.cwd(), 'src/ui/options-controller.ts'),
+      'utf8',
+    );
+    const entrypoint = await readFile(
+      resolve(process.cwd(), 'entrypoints/options/main.ts'),
+      'utf8',
+    );
+
+    expect(controller).not.toMatch(/IntersectionObserver/);
+    expect(entrypoint).toMatch(/initializeOptionsNavigation/);
+  });
 });

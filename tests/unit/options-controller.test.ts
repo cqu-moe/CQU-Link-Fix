@@ -36,6 +36,9 @@ function fixture(): void {
   customSubmit.id = 'custom-submit';
   customSubmit.type = 'submit';
   customForm.append(customInput, customSubmit);
+  const masterState = document.createElement('span');
+  masterState.id = 'master-state';
+  main.append(masterState);
   for (const id of ['custom-list', 'excluded-list', 'status', 'custom-error']) {
     const element = document.createElement('div');
     element.id = id;
@@ -105,9 +108,26 @@ describe('options controller', () => {
     expect(deps.getSnapshot).toHaveBeenCalledOnce();
     expect(deps.getDnrStatus).toHaveBeenCalledOnce();
     expect(checkbox('master-enabled').checked).toBe(true);
+    expect(text('master-state')).toBe('运行中');
+    expect(document.querySelector('#master-state')?.getAttribute('data-tone')).toBe('success');
     expect(document.querySelectorAll('[data-rule-id]').length).toBe(BUILT_IN_RULES.length);
     expect(document.querySelectorAll('[data-rule-group]').length).toBe(4);
+    const enabledRow = document.querySelector('[data-rule-id="core-sso"]')?.closest('.rule-row');
+    expect(enabledRow?.getAttribute('data-state')).toBe('enabled');
+    expect(enabledRow?.querySelector('.rule-state')?.textContent).toBe('已启用');
     expect(text('status')).toContain('设置已加载');
+  });
+
+  it('renders the paused master state in the app bar summary', async () => {
+    await initializeOptionsController(document, dependencies({
+      getSnapshot: vi.fn().mockResolvedValue(snapshot({
+        ...DEFAULT_SETTINGS,
+        enabled: false,
+      })),
+    }));
+
+    expect(text('master-state')).toBe('已停用');
+    expect(document.querySelector('#master-state')?.getAttribute('data-tone')).toBe('muted');
   });
 
   it('marks a rule that background reconciliation skipped', async () => {
@@ -120,6 +140,25 @@ describe('options controller', () => {
     const error = document.querySelector('[data-rule-validation-error-for="core-sso"]');
     expect(error?.textContent).toContain('syntaxError');
     expect(error?.textContent).toContain('未加载');
+    const failedToggle = document.querySelector('[data-rule-id="core-sso"]');
+    expect(error?.id).not.toBe('');
+    expect(failedToggle?.getAttribute('aria-describedby')).toContain(error?.id);
+    const failedRow = error?.closest('.rule-row');
+    expect(failedRow?.getAttribute('data-state')).toBe('error');
+    expect(failedRow?.querySelector('.rule-state')?.textContent).toBe('未加载');
+  });
+
+  it('renders a disabled built-in as a compact paused row', async () => {
+    await initializeOptionsController(document, dependencies({
+      getSnapshot: vi.fn().mockResolvedValue(snapshot({
+        ...DEFAULT_SETTINGS,
+        disabledRuleIds: ['core-sso'],
+      })),
+    }));
+
+    const row = document.querySelector('[data-rule-id="core-sso"]')?.closest('.rule-row');
+    expect(row?.getAttribute('data-state')).toBe('disabled');
+    expect(row?.querySelector('.rule-state')?.textContent).toBe('已停用');
   });
 
   it('renders a default-off built-in as a locked accessible control that pending state cannot unlock', async () => {
@@ -139,6 +178,9 @@ describe('options controller', () => {
     const explanation = document.querySelector('[data-lock-reason-for="default-disabled"]');
     expect(explanation?.textContent).toContain('默认关闭');
     expect(locked.getAttribute('aria-describedby')).toBe(explanation?.id);
+    const lockedRow = locked.closest('.rule-row');
+    expect(lockedRow?.getAttribute('data-state')).toBe('locked');
+    expect(lockedRow?.querySelector('.rule-state')?.textContent).toBe('版本锁定');
     locked.click();
     expect(deps.replaceSettings).not.toHaveBeenCalled();
 
@@ -174,6 +216,7 @@ describe('options controller', () => {
 
     expect(deps.replaceSettings).toHaveBeenCalledOnce();
     expect(checkbox('master-enabled').disabled).toBe(true);
+    expect(text('status')).toContain('正在保存');
     resolve({ ok: false, code: 'operation-failed', error: '保存失败' });
     await settle();
 
@@ -276,6 +319,7 @@ describe('options controller', () => {
     checkbox('all-cqu-enabled').click();
 
     expect(calls).toEqual(['set-mode']);
+    expect(text('status')).toContain('正在申请权限');
     await settle();
     expect(calls).toEqual(['set-mode', 'reload']);
     expect(checkbox('all-cqu-enabled').checked).toBe(true);
@@ -452,6 +496,8 @@ describe('options controller', () => {
 
     expect(deps.replaceSettings).not.toHaveBeenCalled();
     expect(text('custom-error')).toContain('未授予');
+    expect(text('status')).toContain('未授予');
+    expect(document.querySelector('#status')?.getAttribute('data-tone')).toBe('error');
   });
 
   it('guards a double submit while custom permission acquisition is pending', async () => {
@@ -466,9 +512,28 @@ describe('options controller', () => {
     await vi.waitFor(() => expect(deps.requestPermission).toHaveBeenCalledOnce());
 
     expect(button('custom-submit').disabled).toBe(true);
+    expect(text('status')).toContain('正在申请权限');
     resolveRequest(true);
     await settle();
     expect(deps.replaceSettings).toHaveBeenCalledOnce();
+  });
+
+  it('announces saving after custom permission succeeds and the settings write begins', async () => {
+    let resolveSave!: (result: ReplaceSettingsResult) => void;
+    const save = new Promise<ReplaceSettingsResult>((resolve) => { resolveSave = resolve; });
+    const deps = dependencies({
+      requestPermission: vi.fn().mockResolvedValue(true),
+      replaceSettings: vi.fn().mockReturnValue(save),
+    });
+    await initializeOptionsController(document, deps);
+    (document.querySelector('#custom-host') as HTMLInputElement).value = 'library.cqu.edu.cn';
+
+    button('custom-submit').click();
+    await vi.waitFor(() => expect(deps.replaceSettings).toHaveBeenCalledOnce());
+
+    expect(text('status')).toContain('正在保存');
+    resolveSave({ ok: true, revision: 4 });
+    await settle();
   });
 
   it('does not persist a rule when a concurrent cleanup removes the grant before commit', async () => {

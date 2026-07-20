@@ -6,6 +6,7 @@ import { buildOptionsModel, type OptionsRuleModel } from './options-model';
 
 export interface OptionsElements {
   master: HTMLInputElement;
+  masterState: HTMLElement;
   allCqu: HTMLInputElement;
   groups: HTMLElement;
   customForm: HTMLFormElement;
@@ -36,6 +37,7 @@ function requireElement<T extends Element>(
 export function getOptionsElements(root: Document): OptionsElements {
   return {
     master: requireElement(root, '#master-enabled', HTMLInputElement),
+    masterState: requireElement(root, '#master-state', HTMLElement),
     allCqu: requireElement(root, '#all-cqu-enabled', HTMLInputElement),
     groups: requireElement(root, '#built-in-groups', HTMLElement),
     customForm: requireElement(root, '#custom-rule-form', HTMLFormElement),
@@ -100,31 +102,58 @@ function renderRuleToggle(
   return input;
 }
 
+type RuleRowState = 'enabled' | 'disabled' | 'locked' | 'error';
+
+function ruleRowState(rule: OptionsRuleModel): {
+  state: RuleRowState;
+  label: string;
+} {
+  if (rule.validationError) return { state: 'error', label: '未加载' };
+  if (rule.locked) return { state: 'locked', label: '版本锁定' };
+  if (rule.enabled) return { state: 'enabled', label: '已启用' };
+  return { state: 'disabled', label: '已停用' };
+}
+
 function renderRuleCard(
   root: Document,
   rule: OptionsRuleModel,
   handlers: OptionsRenderHandlers,
 ): HTMLElement {
   const isCustom = rule.category === 'custom';
+  const presentation = ruleRowState(rule);
   const article = root.createElement('article');
-  article.className = 'rule-card';
-  const header = root.createElement('div');
-  header.className = 'rule-card__header';
-  const label = root.createElement('label');
+  article.className = 'rule-row';
+  article.dataset.ruleRowFor = rule.id;
+  article.dataset.state = presentation.state;
+
+  const lead = root.createElement('div');
+  lead.className = 'rule-row__lead';
   const input = renderRuleToggle(root, rule, handlers);
+  const label = root.createElement('label');
   label.htmlFor = input.id;
   label.textContent = rule.name;
-  header.append(label, input);
+  lead.append(input, label);
+
   const description = root.createElement('p');
+  description.className = 'rule-row__description';
   description.textContent = rule.description;
+
   const range = root.createElement('code');
+  range.className = 'rule-row__range';
   range.textContent = matcherRangeLabel(rule.matcher);
-  article.append(header, description, range);
+
+  const state = root.createElement('span');
+  state.className = 'rule-state';
+  state.textContent = presentation.label;
+  article.append(lead, description, range, state);
+
   if (rule.validationError) {
     const validationError = root.createElement('p');
+    validationError.id = checkboxId('rule-validation-error', rule.id);
     validationError.className = 'rule-validation-error';
     validationError.dataset.ruleValidationErrorFor = rule.id;
-    validationError.textContent = `规则未加载：${rule.validationError}`;
+    validationError.textContent = '规则未加载：' + rule.validationError;
+    input.setAttribute('aria-describedby', validationError.id);
     article.append(validationError);
   }
   if (rule.locked && rule.lockReason) {
@@ -133,7 +162,8 @@ function renderRuleCard(
     lockReason.className = 'rule-lock-reason';
     lockReason.dataset.lockReasonFor = rule.id;
     lockReason.textContent = rule.lockReason;
-    input.setAttribute('aria-describedby', lockReason.id);
+    const describedBy = input.getAttribute('aria-describedby');
+    input.setAttribute('aria-describedby', [describedBy, lockReason.id].filter(Boolean).join(' '));
     article.append(lockReason);
   }
   if (isCustom) {
@@ -141,8 +171,8 @@ function renderRuleCard(
     remove.type = 'button';
     remove.className = 'danger-button';
     remove.dataset.deleteCustom = rule.id;
-    remove.textContent = '删除规则';
-    remove.setAttribute('aria-label', `删除自定义规则 ${rule.name}`);
+    remove.textContent = '删除';
+    remove.setAttribute('aria-label', '删除自定义规则 ' + rule.name);
     remove.addEventListener('click', () => handlers.deleteCustomRule(rule));
     article.append(remove);
   }
@@ -161,6 +191,8 @@ export function renderOptionsContent(
 ): void {
   if (!snapshot) {
     elements.master.checked = false;
+    elements.masterState.textContent = '状态未知';
+    elements.masterState.dataset.tone = 'muted';
     elements.allCqu.checked = false;
     elements.groups.replaceChildren();
     elements.customList.replaceChildren();
@@ -169,6 +201,8 @@ export function renderOptionsContent(
     return;
   }
   elements.master.checked = snapshot.settings.enabled;
+  elements.masterState.textContent = snapshot.settings.enabled ? '运行中' : '已停用';
+  elements.masterState.dataset.tone = snapshot.settings.enabled ? 'success' : 'muted';
   elements.allCqu.checked = snapshot.settings.enableAllCquDomains;
 
   const model = buildOptionsModel(snapshot.settings, builtInRules, validationErrors);
