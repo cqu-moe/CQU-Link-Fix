@@ -367,6 +367,31 @@ test.describe('rewrite records, UI, and original bypass', () => {
     const options = await extension.openExtensionPage('options.html', true);
     await expect(options.locator('#status')).toContainText('设置已加载');
 
+    await options.evaluate(async () => {
+      await chrome.storage.local.set({
+        settings: {
+          enabled: true,
+          enableAllCquDomains: false,
+          disabledRuleIds: [],
+          customRules: [{
+            id: 'geometry-custom',
+            dnrId: 10_001,
+            name: 'library.cqu.edu.cn',
+            description: '通过 aTrust 打开 library.cqu.edu.cn',
+            category: 'custom',
+            defaultEnabled: true,
+            matcher: { kind: 'host', host: 'library.cqu.edu.cn' },
+            transformer: 'atrust-domain',
+          }],
+          excludedHosts: [],
+        },
+        settingsRevision: 1,
+      });
+    });
+    await options.reload();
+    await expect(options.locator('#status')).toContainText('设置已加载');
+    await expect(options.locator('#custom-list .rule-row')).toContainText('library.cqu.edu.cn');
+
     await options.setViewportSize({ width: 1440, height: 900 });
     const appBarPosition = await options.locator('.app-bar').evaluate(
       (element) => getComputedStyle(element).position,
@@ -386,6 +411,39 @@ test.describe('rewrite records, UI, and original bypass', () => {
     expect(await options.evaluate(
       () => document.documentElement.scrollWidth > document.documentElement.clientWidth,
     )).toBe(false);
+
+    for (const width of [800, 769]) {
+      await options.setViewportSize({ width, height: 900 });
+      const geometry = await options.evaluate(() => {
+        const rows = [...document.querySelectorAll<HTMLElement>(
+          '#built-in-groups .rule-row, #custom-list .rule-row',
+        )].filter((row) => row.getClientRects().length > 0);
+        return {
+          hasOverflow: document.documentElement.scrollWidth > document.documentElement.clientWidth,
+          rows: rows.map((row) => ({
+            clientWidth: row.clientWidth,
+            scrollWidth: row.scrollWidth,
+          })),
+        };
+      });
+      const deleteButton = options.locator('#custom-list .danger-button');
+      await expect(deleteButton).toBeVisible();
+      const deleteButtonBox = await deleteButton.boundingBox();
+      expect(deleteButtonBox).not.toBeNull();
+      expect.soft(
+        deleteButtonBox!.height,
+        `${width}px custom delete touch target`,
+      ).toBeGreaterThanOrEqual(44);
+
+      expect.soft(geometry.hasOverflow, `${width}px document overflow`).toBe(false);
+      expect(geometry.rows.length).toBeGreaterThan(1);
+      for (const [index, row] of geometry.rows.entries()) {
+        expect.soft(
+          row.scrollWidth,
+          `${width}px rule row ${index + 1} clips content`,
+        ).toBeLessThanOrEqual(row.clientWidth);
+      }
+    }
 
     await options.setViewportSize({ width: 700, height: 900 });
     const narrowGeometry = await options.evaluate(() => {

@@ -523,7 +523,7 @@ button:hover:not(:disabled) {
 
 .danger-button {
   justify-self: end;
-  min-height: 36px;
+  min-height: 44px;
   padding: 6px 10px;
   border-color: var(--red);
   background: transparent;
@@ -607,6 +607,38 @@ button:hover:not(:disabled) {
 
   .rule-row__description {
     grid-column: 2 / 3;
+  }
+}
+
+@media (max-width: 900px) {
+  .rule-row {
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 8px 14px;
+    padding: 14px;
+  }
+
+  .rule-row__lead {
+    grid-column: 1;
+    grid-row: 1;
+  }
+
+  .rule-row__description,
+  .rule-row__range,
+  .rule-validation-error,
+  .rule-lock-reason {
+    grid-column: 1 / -1;
+  }
+
+  .rule-state,
+  .danger-button {
+    grid-column: 2;
+    grid-row: 1;
+  }
+
+  .rule-row:has(.danger-button) .rule-state {
+    justify-self: start;
+    grid-column: 1;
+    grid-row: auto;
   }
 }
 
@@ -698,36 +730,6 @@ button:hover:not(:disabled) {
   .group-description {
     min-height: 0;
     padding: 4px 20px 15px;
-  }
-
-  .rule-row {
-    grid-template-columns: minmax(0, 1fr) auto;
-    gap: 8px 14px;
-    padding: 14px;
-  }
-
-  .rule-row__lead,
-  .rule-row__description,
-  .rule-row__range,
-  .rule-validation-error,
-  .rule-lock-reason {
-    grid-column: 1 / -1;
-  }
-
-  .rule-state,
-  .danger-button {
-    grid-column: 2;
-    grid-row: 1;
-  }
-
-  .rule-row:has(.danger-button) .rule-state {
-    justify-self: start;
-    grid-column: 1;
-    grid-row: auto;
-  }
-
-  .rule-row:has(.danger-button) .danger-button {
-    grid-row: auto;
   }
 
   .custom-form__row {
