@@ -4,15 +4,14 @@ import { DEFAULT_SETTINGS } from '../../src/storage/settings';
 import { buildOptionsModel, toEditableSettings } from '../../src/ui/options-model';
 
 describe('options model', () => {
-  it('always exposes the four built-in groups, including empty groups', () => {
+  it('exposes built-in rules as one continuous list in definition order', () => {
     const model = buildOptionsModel(DEFAULT_SETTINGS, BUILT_IN_RULES);
 
-    expect(model.groups.map((group) => [group.category, group.rules.length])).toEqual([
-      ['core', 1],
-      ['important', 0],
-      ['ip', 0],
-      ['addon', 1],
+    expect(model.rules.map((rule) => rule.id)).toEqual([
+      'core-sso',
+      'addon-youth-public',
     ]);
+    expect(model.rules[1]!.name).toBe('团委官网链接');
   });
 
   it('derives enabled state from saved built-in overrides', () => {
@@ -21,7 +20,7 @@ describe('options model', () => {
       disabledRuleIds: ['core-sso'],
     }, BUILT_IN_RULES);
 
-    expect(model.groups[0]!.rules[0]).toMatchObject({ id: 'core-sso', enabled: false });
+    expect(model.rules[0]).toMatchObject({ id: 'core-sso', enabled: false });
   });
 
   it('attaches validation errors to their stable rule IDs', () => {
@@ -30,11 +29,11 @@ describe('options model', () => {
       message: 'Chromium 不支持该规则正则',
     }]);
 
-    expect(model.groups[0]!.rules[0]).toMatchObject({
+    expect(model.rules[0]).toMatchObject({
       id: 'core-sso',
       validationError: 'Chromium 不支持该规则正则',
     });
-    expect(model.groups[3]!.rules[0]).toMatchObject({
+    expect(model.rules[1]).toMatchObject({
       id: 'addon-youth-public',
       validationError: null,
     });
@@ -45,7 +44,7 @@ describe('options model', () => {
 
     const model = buildOptionsModel(DEFAULT_SETTINGS, [defaultDisabled]);
 
-    expect(model.groups[0]!.rules[0]).toMatchObject({
+    expect(model.rules[0]).toMatchObject({
       id: 'default-disabled',
       enabled: false,
       locked: true,

@@ -27,6 +27,7 @@ export interface PopupControllerDependencies {
 }
 
 interface PopupElements {
+  runtimePill: HTMLElement;
   runtimeStatus: HTMLElement;
   status: HTMLElement;
   route: HTMLElement;
@@ -49,6 +50,7 @@ function requireElement<T extends Element>(
 
 function getElements(root: Document): PopupElements {
   return {
+    runtimePill: requireElement(root, '#runtime-pill', HTMLElement),
     runtimeStatus: requireElement(root, '#runtime-status', HTMLElement),
     status: requireElement(root, '#status', HTMLElement),
     route: requireElement(root, '#route', HTMLElement),
@@ -123,11 +125,14 @@ export async function initializePopupController(
 
   const renderModel = (): void => {
     elements.runtimeStatus.textContent = model.runtimeLabel;
+    elements.runtimePill.dataset.tone = model.runtimeState === 'enabled'
+      ? 'success'
+      : model.runtimeState === 'disabled' ? 'muted' : 'danger';
     elements.status.textContent = model.status;
     elements.route.textContent = model.originalHost === model.targetHost
       ? model.originalHost
       : `${model.originalHost} → ${model.targetHost}`;
-    elements.rule.textContent = model.ruleId ? `规则：${model.ruleId}` : '规则：未命中';
+    elements.rule.textContent = model.ruleLabel ?? '未命中规则';
     elements.feedback.textContent = model.error ? `错误：${model.error}` : '';
     renderControls();
   };
@@ -194,6 +199,7 @@ export async function initializePopupController(
 
   elements.status.textContent = '正在读取当前页面…';
   elements.runtimeStatus.textContent = '正在读取扩展状态…';
+  elements.runtimePill.dataset.tone = 'muted';
   elements.route.textContent = '—';
   elements.rule.textContent = '规则：读取中';
   elements.feedback.textContent = '';
@@ -209,6 +215,9 @@ export async function initializePopupController(
   }
   model = initialModel(runtimeState);
   elements.runtimeStatus.textContent = model.runtimeLabel;
+  elements.runtimePill.dataset.tone = runtimeState === 'enabled'
+    ? 'success'
+    : runtimeState === 'disabled' ? 'muted' : 'danger';
 
   let tabs: readonly PopupTab[];
   try {

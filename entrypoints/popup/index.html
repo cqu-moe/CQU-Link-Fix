@@ -8,52 +8,7 @@
     <link rel="stylesheet" href="./style.css" />
   </head>
   <body>
-    <main>
-      <header class="masthead">
-        <p class="eyebrow">CQU · LINK UTILITY / 01</p>
-        <h1>CQU Link Fix</h1>
-        <p class="subtitle">重庆大学链接改写工具</p>
-      </header>
-
-      <p id="runtime-status" class="eyebrow" aria-live="polite">
-        正在读取扩展状态…
-      </p>
-
-      <section id="status" class="status" role="status" aria-live="polite" aria-atomic="true">
-        正在读取当前页面…
-      </section>
-
-      <section class="readout" aria-label="当前改写信息">
-        <div class="readout-row">
-          <span class="label">路径</span>
-          <p id="route">—</p>
-        </div>
-        <div class="readout-row">
-          <span class="label">来源</span>
-          <p id="rule">规则：读取中</p>
-        </div>
-      </section>
-
-      <p id="feedback" class="feedback" aria-live="polite"></p>
-
-      <section class="actions" aria-label="当前页面操作">
-        <button id="open-original" class="primary" type="button" disabled>
-          <span>原地址打开一次</span><span aria-hidden="true">↗</span>
-        </button>
-        <button id="exclude-host" type="button" disabled>
-          <span>暂停当前站点</span><span aria-hidden="true">—</span>
-        </button>
-        <button id="open-options" type="button">
-          <span>管理全部规则</span><span aria-hidden="true">→</span>
-        </button>
-      </section>
-
-      <footer>
-        <span>LOCAL ONLY</span>
-        <span>MV3</span>
-      </footer>
-    </main>
-
+    <div id="root"></div>
     <script type="module" src="./main.ts"></script>
   </body>
 </html>

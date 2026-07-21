@@ -169,17 +169,42 @@ export async function initializeOptionsController(
   const runEditable = (
     mutate: (current: EditableSettings) => EditableSettings,
     successMessage: string,
+    syncSuccessfulRender?: () => boolean,
   ): void => {
     if (pending || !saved) return;
     pending = true;
     setStatus('正在保存…');
     renderControls();
     const candidate = mutate(toEditableSettings(saved.settings));
+    let result: CommitResult | null = null;
     void commit(candidate, successMessage)
+      .then((commitResult) => {
+        result = commitResult;
+      })
       .finally(() => {
         pending = false;
-        render();
+        if (result?.outcome === 'success' && syncSuccessfulRender?.()) {
+          renderControls();
+        } else {
+          render();
+        }
       });
+  };
+
+  const syncRenderedRule = (rule: OptionsRuleModel, enabled: boolean): boolean => {
+    const row = [...scope.querySelectorAll<HTMLElement>('[data-rule-row-for]')]
+      .find((candidate) => candidate.dataset.ruleRowFor === rule.id);
+    const input = row?.querySelector<HTMLInputElement>('input[type="checkbox"]');
+    const state = row?.querySelector<HTMLElement>('.rule-state');
+    const hasValidationError = validationErrors.some((error) => error.ruleId === rule.id) ||
+      Boolean(row?.querySelector('[data-rule-validation-error-for]'));
+    if (!row || !input || !state || hasValidationError) return false;
+
+    input.checked = enabled;
+    input.setAttribute('aria-label', `${enabled ? '停用' : '启用'}${rule.name}`);
+    row.dataset.state = enabled ? 'enabled' : 'disabled';
+    state.textContent = enabled ? '已启用' : '已停用';
+    return true;
   };
 
   const handlers: OptionsRenderHandlers = {
@@ -189,7 +214,8 @@ export async function initializeOptionsController(
         if (enabled) disabled.delete(rule.id);
         else disabled.add(rule.id);
         return { ...current, disabledRuleIds: [...disabled].sort() };
-      }, `已${enabled ? '启用' : '停用'} ${rule.name}`);
+      }, `已${enabled ? '启用' : '停用'} ${rule.name}`, () =>
+        syncRenderedRule(rule, enabled));
     },
     deleteCustomRule: (rule: OptionsRuleModel) => {
       runEditable((current) => ({

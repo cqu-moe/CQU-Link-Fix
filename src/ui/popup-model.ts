@@ -13,6 +13,7 @@ export interface PopupModel {
   canBypass: boolean;
   canExclude: boolean;
   ruleId: string | null;
+  ruleLabel: string | null;
   error: string | null;
 }
 
@@ -38,8 +39,19 @@ const UNSUPPORTED_MODEL: Omit<PopupModel, 'runtimeState' | 'runtimeLabel'> = {
   canBypass: false,
   canExclude: false,
   ruleId: null,
+  ruleLabel: null,
   error: null,
 };
+
+const BUILT_IN_RULE_LABELS = {
+  'core-sso': '统一身份认证',
+  'addon-youth-public': '团委官网链接',
+} satisfies Record<string, string>;
+
+function ruleLabel(ruleId: string): string {
+  return BUILT_IN_RULE_LABELS[ruleId as keyof typeof BUILT_IN_RULE_LABELS]
+    ?? '自定义规则';
+}
 
 export function buildPopupModel(
   tabUrl: string | null | undefined,
@@ -57,6 +69,7 @@ export function buildPopupModel(
     canBypass: false,
     canExclude: true,
     ruleId: null,
+    ruleLabel: null,
     error: null,
   };
   if (!record) return unchanged;
@@ -77,13 +90,14 @@ export function buildPopupModel(
   return {
     ...runtimeFields(runtimeState),
     status: record.ruleId === 'addon-youth-public'
-      ? error ? '团委公网页面加载失败' : '已转换为团委公网链接'
+      ? error ? '团委官网页面加载失败' : '已转换为团委官网链接'
       : error ? 'aTrust 页面加载失败' : '已通过 aTrust 打开',
     originalHost: original.hostname,
     targetHost: target.hostname,
     canBypass: true,
     canExclude: true,
     ruleId: record.ruleId,
+    ruleLabel: ruleLabel(record.ruleId),
     error,
   };
 }

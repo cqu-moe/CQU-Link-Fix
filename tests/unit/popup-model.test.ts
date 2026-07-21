@@ -39,6 +39,7 @@ describe('popup model', () => {
       canBypass: true,
       canExclude: true,
       ruleId: 'core-sso',
+      ruleLabel: '统一身份认证',
       error: null,
     });
   });
@@ -51,6 +52,7 @@ describe('popup model', () => {
       canBypass: false,
       canExclude: true,
       ruleId: null,
+      ruleLabel: null,
       error: null,
     });
   });
@@ -66,6 +68,7 @@ describe('popup model', () => {
       canBypass: false,
       canExclude: true,
       ruleId: null,
+      ruleLabel: null,
       error: null,
     });
   });
@@ -78,7 +81,10 @@ describe('popup model', () => {
         originalUrl: 'https://youth.cqu.edu.cn/info/1009/24264.htm',
         targetUrl: 'https://youth.cqu.edu.cn/content.jsp?urltype=news.NewsContentUrl&wbtreeid=1009&wbnewsid=24264',
       }),
-    ).status).toBe('已转换为团委公网链接');
+    )).toMatchObject({
+      status: '已转换为团委官网链接',
+      ruleLabel: '团委官网链接',
+    });
   });
 
   it('surfaces a detected navigation error only for the matching target', () => {
@@ -104,6 +110,7 @@ describe('popup model', () => {
         canBypass: false,
         canExclude: false,
         ruleId: null,
+        ruleLabel: null,
         error: null,
       });
     },

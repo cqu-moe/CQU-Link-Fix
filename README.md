@@ -1,6 +1,6 @@
 # CQU Link Fix
 
-面向 Chromium 的重庆大学链接修正扩展。当前版本是功能性首版，发布门禁仍为 **BLOCKED**；详见[真实网络烟测记录](docs/validation/live-smoke.md)。
+面向 Chromium 的重庆大学链接修正扩展。当前版本为 **0.3.0**，弹窗与设置页使用 React 19，底层规则、权限、存储与 service worker 保持 TypeScript / WXT 实现。真实网络发布门禁仍为 **BLOCKED**；详见[真实网络烟测记录](docs/validation/live-smoke.md)。
 
 ## 默认功能
 
@@ -16,6 +16,13 @@
 
 发布版本运行 `pnpm zip`，解压 WXT 在 `.output` 中生成的 zip 后按相同步骤加载。当前包仅供验证，不应在发布门禁解除前作为正式版本发布。
 
+## 界面与设计系统
+
+- [DESIGN.md](DESIGN.md) 是视觉、布局、品牌、组件、动效和文案的生产规范。
+- `src/ui/react/design-system.css` 保存 Vercel 基底令牌和共享组件样式。
+- `public/fonts/`、`public/brand/` 和 `public/icon/` 保存离线字体、唯一 Logo 源与 Manifest 图标。
+- [设计交接](docs/design/README.md) 记录 Open Design 来源映射。日常开发不再依赖 Open Design 项目目录。
+
 ## 控制与回退
 
 弹窗会显示当前改写规则。用户可以让当前标签页原地址打开一次，也可以暂停当前站点；长期规则、总开关和可选的全 CQU 模式在设置页管理。aTrust 返回错误页时扩展不会静默回退，用户可主动选择原地址。
@@ -26,7 +33,7 @@
 2. 当前标签页的一次性绕过和用户排除项。
 3. 用户本地精确规则。
 4. 团委等路径修正规则。
-5. 核心认证及随版本发布的验证名单。
+5. 重要站点及随版本发布的验证名单。
 6. 默认关闭的“全部 CQU 域名”模式。
 
 ## 自定义规则限制
@@ -49,7 +56,7 @@
 
 ## 开发与测试
 
-要求 Node.js 与 pnpm。常用命令：
+要求 Node.js 与 pnpm 11。常用命令：
 
 ```bash
 pnpm install
@@ -61,6 +68,8 @@ pnpm test:e2e
 pnpm verify
 pnpm zip
 ```
+
+`pnpm dev` 会启动 WXT 开发模式；`pnpm build` 生成可直接加载的 `.output/chrome-mv3`；`pnpm zip` 生成带版本号的安装包。
 
 `pnpm test:e2e` 会重新构建并运行 loaded-extension 自动化测试；默认 E2E 使用本地路由 fixture，因此不能替代[真实网络烟测](docs/validation/live-smoke.md)。可选权限批准门需在弹窗中批准两个请求：
 
