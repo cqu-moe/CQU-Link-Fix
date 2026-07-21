@@ -1,6 +1,6 @@
 # CQU Link Fix
 
-面向 Chromium 的重庆大学链接修正扩展。当前版本为 **0.3.0**，弹窗与设置页使用 React 19，底层规则、权限、存储与 service worker 保持 TypeScript / WXT 实现。真实网络发布门禁仍为 **BLOCKED**；详见[真实网络烟测记录](docs/validation/live-smoke.md)。
+面向 Chromium 的重庆大学链接修正扩展。当前版本为 **0.3.0**，弹窗与设置页使用 React 19，底层规则、权限、存储与 service worker 保持 TypeScript / WXT 实现。真实网络验证证据目前为 **PARTIAL**；团委规则已获用户实际使用确认，完整 SSO 登录回调与校园网/校外网矩阵仍未形成可复现记录，详见[真实网络烟测记录](docs/validation/live-smoke.md)。
 
 ## 默认功能
 
@@ -14,7 +14,7 @@
 
 开发版本运行 `pnpm build` 后，在 Chromium 扩展管理页开启开发者模式并加载 `.output/chrome-mv3`。
 
-发布版本运行 `pnpm zip`，解压 WXT 在 `.output` 中生成的 zip 后按相同步骤加载。当前包仅供验证，不应在发布门禁解除前作为正式版本发布。
+发布版本运行 `pnpm zip`，解压 WXT 在 `.output` 中生成的 zip 后按相同步骤加载。正式提交前应复核[双商店提交清单](docs/store/submission-checklist.md)和真实网络证据边界。
 
 ## 界面与设计系统
 

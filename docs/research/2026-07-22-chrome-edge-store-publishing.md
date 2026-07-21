@@ -10,14 +10,14 @@
 
 CQU Link Fix 不需要为 Edge 重写一套代码。当前 WXT 产物已经是 Manifest V3，ZIP 根目录含 `manifest.json`，扩展名和描述不含 “Chrome”，也没有 `update_url`；Microsoft 官方兼容性表同时列出了本项目使用的 `declarativeNetRequest`、`permissions`、`storage` 和 `webNavigation`，所以同一个发布 ZIP 可以作为 Chrome 和 Edge 的候选包。正式提交前仍必须在 Edge 中侧载验收，因为 Microsoft 明确要求检查 API 支持并在 Edge 中测试。[Chrome 移植 Edge 指南](https://learn.microsoft.com/en-us/microsoft-edge/extensions/developer-guide/port-chrome-extension)；[Edge API 支持表](https://learn.microsoft.com/en-us/microsoft-edge/extensions/developer-guide/api-support)；[Edge 权限表](https://learn.microsoft.com/en-us/microsoft-edge/extensions/developer-guide/declare-permissions)
 
-项目的 ZIP 技术基础已经满足双商店要求；提交前仍需完成以下发布准备：
+项目的 ZIP 技术基础已经满足双商店要求。本轮发布准备已完成 Manifest 本地化、双语隐私政策、商店文案、审核说明、草稿素材、Chromium 全量自动化和 Microsoft Edge 侧载烟测。正式提交前还要处理以下现场事项：
 
-1. [真实网络烟测记录](../validation/live-smoke.md)中的 2026-07-12 团委 HTTP 412 是特定网络会话的历史结果；2026-07-22 用户已确认团委规则在实际使用中正常工作，因此它不再作为当前已知坏链接。完整 CAS 登录回调与校园网/校外网矩阵仍缺少可复现记录，提交前需要准备清晰的审核测试步骤。[Edge 开发者政策 1.1.3 与 1.3](https://learn.microsoft.com/en-us/legal/microsoft-edge/extensions/developer-policies#113-functionality)；[Chrome 发布前准备](https://developer.chrome.com/docs/webstore/prepare)
-2. 仓库目前只有 Manifest 图标，没有 Chrome 所需的 1280×800 商店截图和 440×280 小宣传图；也没有 Edge 推荐的独立 300×300 商店 Logo、截图或宣传图。
-3. 必须发布一个稳定、无需登录即可访问的隐私政策 URL。该扩展会读取和处理顶层导航 URL，并把规则、排除域名和临时改写记录保存在本机；Google 明确规定，即使数据只在用户设备本地处理，也属于需要披露的数据处理，并需要隐私政策。[Chrome 用户数据 FAQ](https://developer.chrome.com/docs/webstore/program-policies/user-data-faq)；[Chrome 隐私政策要求](https://developer.chrome.com/docs/webstore/program-policies/privacy)
-4. 当前 Manifest 的简短描述是英文，包内没有 `_locales`。面向重庆大学用户的首个正式版本应至少补齐简体中文 Manifest 文案和中文商店页；Edge 只有在 Manifest 使用 i18n 消息引用并声明 `default_locale` 时，才会从包中正确识别多语言。[Edge 多语言说明](https://learn.microsoft.com/en-us/microsoft-edge/extensions/publish/publish-extension#if-a-single-locale-appears-but-the-package-includes-multiple-languages)
+1. [真实网络烟测记录](../validation/live-smoke.md)中的 2026-07-12 团委 HTTP 412 是特定网络会话的历史结果；2026-07-22 用户已确认团委规则在实际使用中正常工作，因此它不再作为当前已知坏链接。完整 CAS 登录回调与校园网/校外网矩阵仍缺少可复现记录；仓库已经准备了无需个人凭据的审核步骤，并明确区分 URL 转换与目标站点响应。[Edge 开发者政策 1.1.3 与 1.3](https://learn.microsoft.com/en-us/legal/microsoft-edge/extensions/developer-policies#113-functionality)；[Chrome 发布前准备](https://developer.chrome.com/docs/webstore/prepare)
+2. 仓库当前仍为私有。根目录 `PRIVACY.md` 已完成，但 `https://github.com/cqu-moe/CQU-Link-Fix/blob/main/PRIVACY.md` 只有在维护者公开仓库并从未登录窗口复核后，才能作为稳定、无需登录的隐私政策 URL。
+3. 两张 1280×800 截图、440×280 小宣传图和 300×300 Edge Logo 已生成，明天由维护者决定直接使用还是调整第二版。
+4. Chrome 账号已由维护者注册；两步验证、联系邮箱、Trader/Non-Trader、分发地区和 Edge program 账号类型仍需在实际后台核对或选择。
 
-因此，合理顺序是：**补齐隐私政策、中文文案和素材，重新验证同一个冻结候选包，并为两家商店准备可复现的审核说明。**
+因此，下一步顺序是：**公开仓库并复核政策 URL，确认草稿素材，在两家后台核对账号/法律字段，然后上传同一个已验证 ZIP。**
 
 ## 1. 当前仓库就绪度
 
@@ -27,10 +27,10 @@ CQU Link Fix 不需要为 Edge 重写一套代码。当前 WXT 产物已经是 M
 | 发布包 | 已检查 `.output/cqu-link-fix-0.3.0-chrome.zip`；`manifest.json` 位于 ZIP 根目录，包约 226 KiB | 可作为双商店候选包；正式提交前必须重新构建、测试和校验 |
 | 权限 | `storage`、`activeTab`、`declarativeNetRequestWithHostAccess`、`webNavigation`，以及精确必需/可选主机权限 | 权限范围已经相对克制，但后台必须逐项解释用途；Microsoft 官方权限表支持这些权限。[Edge 权限表](https://learn.microsoft.com/en-us/microsoft-edge/extensions/developer-guide/declare-permissions) |
 | 远程代码 | 当前 JS、React、字体和图片均随 ZIP 打包，Manifest 未声明远程执行入口 | 提交时应选择“不使用远程代码”；MV3 禁止加载并执行远程托管代码。[Chrome MV3 远程代码规则](https://developer.chrome.com/docs/extensions/develop/migrate/what-is-mv3)；[Edge 发布隐私字段](https://learn.microsoft.com/en-us/microsoft-edge/extensions/publish/publish-extension#declare-any-use-of-remote-code) |
-| Edge 迁移 | 当前 Manifest 没有 `update_url`，名称/描述也不含 “Chrome” | 不需要 Edge 专用源码分支；仍要在 `edge://extensions` 侧载完整验收。[Edge 移植指南](https://learn.microsoft.com/en-us/microsoft-edge/extensions/developer-guide/port-chrome-extension) |
-| 商店素材 | 仅有 16/32/48/128/512 图标 | 未完成；需要另做截图、宣传图和 Edge 商店 Logo |
-| 隐私政策 | README 有隐私说明，但没有确认一个公开、稳定的政策 URL | 未完成；不能只把 README 中一句“无遥测”当作商店隐私披露 |
-| 发布验收 | 自动化测试和本地包已存在；团委规则已获用户实际使用确认，完整 SSO 网络矩阵仍缺可复现记录 | 提交前补审核说明并完成实际 Edge 侧载验收 |
+| Edge 迁移 | 当前 Manifest 没有 `update_url`，名称/描述也不含 “Chrome”；生产包已在本机 Microsoft Edge 加载并完成规则、设置页和弹窗烟测 | 不需要 Edge 专用源码分支；提交前仍建议人工复核原生可选权限提示。[Edge 移植指南](https://learn.microsoft.com/en-us/microsoft-edge/extensions/developer-guide/port-chrome-extension) |
+| 商店素材 | 128/300 px Logo、两张 1280×800 截图和 440×280 小宣传图已生成 | 首轮草稿完成；维护者明天复核视觉后即可上传或重生成 |
+| 隐私政策 | 根目录中英双语 `PRIVACY.md` 已完成 | 内容完成；仓库公开后必须从未登录窗口确认 URL 可访问 |
+| 发布验收 | 22 个单测文件共 462 项通过，Chromium E2E 20 项通过、2 项原生权限人工门禁跳过；Edge 侧载烟测通过 | 技术候选包已形成；完整 SSO 网络矩阵仍属于证据边界 |
 
 ### Edge 功能性政策要求准确描述证据边界
 
@@ -91,11 +91,11 @@ Edge 同样上传 `.zip`，包中要包含 Manifest、图片和运行所需文�
 
 ### 中文本地化
 
-当前 Manifest 描述为英文 `Rewrite and repair Chongqing University links.`，而扩展 UI 和用户群主要是中文。建议首发包增加至少 `zh_CN`，并保留英文：
+当前 Manifest 已使用消息引用，并以 `zh_CN` 为默认语言、保留英文：
 
-- Manifest 使用 `__MSG_extensionName__`、`__MSG_extensionDescription__`；
-- 增加 `default_locale`；
-- 在 `_locales/zh_CN/messages.json` 和英文 locale 中放置一致的名称与简短描述；
+- Manifest 使用 `__MSG_extName__`、`__MSG_extDescription__`；
+- `default_locale` 为 `zh_CN`；
+- `_locales/zh_CN/messages.json` 和 `_locales/en/messages.json` 包含一致功能范围的名称与简短描述；
 - Chrome/Edge 商店页分别填写中文详细描述和截图，英文页描述的功能范围必须与中文一致。
 
 Chrome 会按包中的 `_locales` 提供本地化商店资料入口，并要求不同语言描述的功能集合保持一致。[Chrome 本地化商店页](https://developer.chrome.com/docs/webstore/cws-dashboard-listing#localize-your-listing)；Edge 也依赖 Manifest i18n 引用识别包内语言。[Edge 多语言说明](https://learn.microsoft.com/en-us/microsoft-edge/extensions/publish/publish-extension#if-a-single-locale-appears-but-the-package-includes-multiple-languages)
@@ -130,7 +130,7 @@ Edge 的每个商店语言页都要填详细描述和 Logo；其它视觉素材�
 | YouTube 视频 | 可选；如果提供，必须符合商店政策并关闭广告 |
 | 搜索词 | 可选；最多 7 个词组、总计最多 21 个单词，每项不超过 30 字符 |
 
-本项目需要新增的最小素材集：
+本轮已按以下最小素材集生成首轮草稿：
 
 1. 一张无浏览器个人信息、账号、CAS ticket、Cookie 或真实学号的 1280×800 功能截图；建议实际准备 3–5 张，覆盖弹窗、设置页、改写成功、可选权限与回退。
 2. 一张 440×280 小宣传图，可同时复用两家商店，但要分别上传。
@@ -242,13 +242,13 @@ Edge 的每个更新都是新 submission，也要重新认证。初次创建产�
 - [ ] 注册 Chrome 开发者账号，完成实际付款、邮箱验证、两步验证和 Trader/Non-Trader 声明。
 - [ ] 注册 Edge program；若选 Company，提前准备组织资料与公司 approver。
 - [ ] 完成校园网/校外网/aTrust 的真实网络烟测，解除仓库发布门禁。
-- [ ] 在 Edge certification notes 中说明团委规则已获用户实际使用确认、历史 HTTP 412 的网络边界，以及无需个人凭据的复现步骤。[Edge 开发者政策](https://learn.microsoft.com/en-us/legal/microsoft-edge/extensions/developer-policies#113-functionality)
-- [ ] 增加 `zh_CN`/英文 Manifest 本地化，并冻结中英文名称与短描述。
+- [x] 在 Edge certification notes 中说明团委规则已获用户实际使用确认、历史 HTTP 412 的网络边界，以及无需个人凭据的复现步骤。[Edge 开发者政策](https://learn.microsoft.com/en-us/legal/microsoft-edge/extensions/developer-policies#113-functionality)
+- [x] 增加 `zh_CN`/英文 Manifest 本地化，并冻结中英文名称与短描述。
 - [ ] 发布公开隐私政策 URL；内容与代码、Chrome/Edge Dashboard 勾选完全一致。
-- [ ] 准备 128×128 图标、300×300 Edge Logo、1–5 张 1280×800 截图、440×280 小宣传图；可选 1400×560 大图。
-- [ ] 准备中英文详细描述、支持 URL、主页 URL、单一用途与逐项权限说明。
-- [ ] 重新运行验证、打包、ZIP 完整性检查，并在 Chrome 与 Edge 各自侧载验收。
-- [ ] 扫描最终 ZIP，确认没有远程执行代码、秘密、测试凭据、Source Map 中的敏感信息或多余权限。
+- [x] 准备 128×128 图标、300×300 Edge Logo、两张 1280×800 截图和 440×280 小宣传图；1400×560 大图为可选项。
+- [x] 准备中英文详细描述、支持 URL、主页 URL、单一用途与逐项权限说明。
+- [x] 重新运行验证、打包、ZIP 完整性检查，并在 Chromium 与 Microsoft Edge 完成自动化/侧载烟测。
+- [x] 检查最终 ZIP，确认没有远程执行代码、秘密、测试凭据、Source Map 中的敏感信息或多余权限。
 
 ### B. 提交与审核
 
