@@ -82,4 +82,4 @@ Repair the route. Keep authentication with the original site.
 - Chrome/Edge 小宣传图：`docs/store/assets/draft-small-promo-440x280.png`
 - Edge 商店 Logo：`docs/store/assets/edge-logo-300x300.png`
 - Chrome 商店图标：`public/icon/128.png`
-
+- 讨论用 AI 构图概念（不可直接上传）：`docs/store/assets/draft-ai-promo-concept.png`

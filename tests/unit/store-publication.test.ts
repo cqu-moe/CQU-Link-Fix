@@ -3,7 +3,17 @@ import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 const root = process.cwd();
-const read = (relativePath: string) => readFile(path.join(root, relativePath), 'utf8');
+const resolve = (relativePath: string) => path.join(root, relativePath);
+const read = (relativePath: string) => readFile(resolve(relativePath), 'utf8');
+
+const readPngDimensions = async (relativePath: string) => {
+  const png = await readFile(resolve(relativePath));
+  expect(png.subarray(1, 4).toString('ascii')).toBe('PNG');
+  return {
+    width: png.readUInt32BE(16),
+    height: png.readUInt32BE(20),
+  };
+};
 
 describe('store publication documents', () => {
   it('publishes a bilingual privacy policy with local-only data handling', async () => {
@@ -42,5 +52,20 @@ describe('store publication documents', () => {
     for (const document of [listing, disclosures, reviewer, checklist]) {
       expect(document).not.toMatch(/\b(?:TBD|TODO|PLACEHOLDER)\b/i);
     }
+  });
+
+  it('generates draft store artwork at exact marketplace dimensions', async () => {
+    await expect(
+      readPngDimensions('docs/store/assets/draft-screenshot-options-1280x800.png'),
+    ).resolves.toEqual({ width: 1280, height: 800 });
+    await expect(
+      readPngDimensions('docs/store/assets/draft-screenshot-popup-1280x800.png'),
+    ).resolves.toEqual({ width: 1280, height: 800 });
+    await expect(
+      readPngDimensions('docs/store/assets/draft-small-promo-440x280.png'),
+    ).resolves.toEqual({ width: 440, height: 280 });
+    await expect(
+      readPngDimensions('docs/store/assets/edge-logo-300x300.png'),
+    ).resolves.toEqual({ width: 300, height: 300 });
   });
 });
