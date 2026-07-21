@@ -1,0 +1,8 @@
+{
+  "extName": {
+    "message": "CQU Link Fix"
+  },
+  "extDescription": {
+    "message": "在本机修正重庆大学相关网站的顶层导航链接，并提供暂停与原地址回退。"
+  }
+}

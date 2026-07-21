@@ -1,0 +1,8 @@
+{
+  "extName": {
+    "message": "CQU Link Fix"
+  },
+  "extDescription": {
+    "message": "Repair top-level navigation links for Chongqing University sites with local controls and rollback."
+  }
+}

@@ -1,13 +1,14 @@
 import { defineConfig } from 'wxt';
-import { EXTENSION_NAME, EXTENSION_VERSION } from './src/meta';
+import { EXTENSION_VERSION } from './src/meta';
 
 export default defineConfig({
   modules: ['@wxt-dev/module-react'],
   manifestVersion: 3,
   manifest: {
-    name: EXTENSION_NAME,
+    name: '__MSG_extName__',
     version: EXTENSION_VERSION,
-    description: 'Rewrite and repair Chongqing University links.',
+    description: '__MSG_extDescription__',
+    default_locale: 'zh_CN',
     permissions: [
       'storage',
       'activeTab',

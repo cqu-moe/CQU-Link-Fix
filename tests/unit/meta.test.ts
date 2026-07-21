@@ -1,10 +1,38 @@
+import { readFile } from 'node:fs/promises';
+import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import packageJson from '../../package.json' with { type: 'json' };
 import { EXTENSION_NAME, EXTENSION_VERSION } from '../../src/meta';
+
+const root = process.cwd();
+
+async function readMessages(relativePath: string): Promise<Record<string, { message: string }>> {
+  return JSON.parse(
+    await readFile(path.join(root, relativePath), 'utf8'),
+  ) as Record<string, { message: string }>;
+}
 
 describe('extension metadata', () => {
   it('exposes stable initial metadata', () => {
     expect(EXTENSION_NAME).toBe('CQU Link Fix');
     expect(EXTENSION_VERSION).toBe(packageJson.version);
+  });
+
+  it('localizes manifest name and description for Chinese and English', async () => {
+    const [config, zh, en] = await Promise.all([
+      readFile(path.join(root, 'wxt.config.ts'), 'utf8'),
+      readMessages('public/_locales/zh_CN/messages.json'),
+      readMessages('public/_locales/en/messages.json'),
+    ]);
+
+    expect(config).toContain("name: '__MSG_extName__'");
+    expect(config).toContain("description: '__MSG_extDescription__'");
+    expect(config).toContain("default_locale: 'zh_CN'");
+    expect(Object.keys(zh).sort()).toEqual(['extDescription', 'extName']);
+    expect(Object.keys(en).sort()).toEqual(['extDescription', 'extName']);
+    expect(zh.extName?.message).toBe('CQU Link Fix');
+    expect(en.extName?.message).toBe('CQU Link Fix');
+    expect(zh.extDescription?.message.length).toBeLessThanOrEqual(132);
+    expect(en.extDescription?.message.length).toBeLessThanOrEqual(132);
   });
 });
