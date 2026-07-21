@@ -22,8 +22,10 @@ function rewriteRecord(overrides: Partial<RewriteRecord> = {}): RewriteRecord {
 function renderFixture(): void {
   document.body.innerHTML = `
     <main>
-      <p id="runtime-status"></p>
-      <section id="status"></section>
+      <div id="runtime-pill">
+        <p id="runtime-status"></p>
+        <section id="status"></section>
+      </div>
       <p id="route"></p>
       <p id="rule"></p>
       <p id="feedback"></p>
@@ -78,9 +80,11 @@ describe('popup controller', () => {
     expect(deps.queryActiveTabs).toHaveBeenCalledOnce();
     expect(deps.getSettingsSnapshot).toHaveBeenCalledOnce();
     expect(text('runtime-status')).toBe('扩展运行中');
+    expect(document.querySelector('#runtime-pill')?.getAttribute('data-tone')).toBe('success');
     expect(deps.sendMessage).toHaveBeenCalledWith({ type: 'get-tab-state', tabId: 7 });
     expect(text('status')).toBe('已通过 aTrust 打开');
     expect(text('route')).toContain('sso.cqu.edu.cn');
+    expect(text('rule')).toBe('统一身份认证');
     expect(button('open-original').disabled).toBe(false);
     expect(button('exclude-host').disabled).toBe(false);
   });
@@ -96,6 +100,7 @@ describe('popup controller', () => {
     }));
 
     expect(text('runtime-status')).toBe('扩展已停用');
+    expect(document.querySelector('#runtime-pill')?.getAttribute('data-tone')).toBe('muted');
     expect(text('status')).toBe('当前页面未改写');
   });
 
@@ -105,6 +110,7 @@ describe('popup controller', () => {
     }));
 
     expect(text('runtime-status')).toBe('扩展后台不可用');
+    expect(document.querySelector('#runtime-pill')?.getAttribute('data-tone')).toBe('danger');
   });
 
   it.each([

@@ -36,15 +36,21 @@ function fixture(): void {
   customSubmit.id = 'custom-submit';
   customSubmit.type = 'submit';
   customForm.append(customInput, customSubmit);
+  const dependent = document.createElement('div');
+  dependent.dataset.settingsDependent = '';
   const masterState = document.createElement('span');
   masterState.id = 'master-state';
   main.append(masterState);
-  for (const id of ['custom-list', 'excluded-list', 'status', 'custom-error']) {
+  for (const id of ['custom-list', 'excluded-list', 'custom-error']) {
     const element = document.createElement('div');
     element.id = id;
-    main.append(element);
+    dependent.append(element);
   }
-  main.append(master, allCqu, groups, customForm);
+  const status = document.createElement('div');
+  status.id = 'status';
+  main.append(master, status);
+  dependent.prepend(allCqu, groups, customForm);
+  main.append(dependent);
   document.body.append(main);
 }
 
@@ -100,7 +106,7 @@ describe('options controller', () => {
   beforeEach(fixture);
   afterEach(() => vi.useRealTimers());
 
-  it('loads only the background snapshot and renders saved grouped state', async () => {
+  it('loads only the background snapshot and renders built-ins as one flat list', async () => {
     const deps = dependencies();
 
     await initializeOptionsController(document, deps);
@@ -111,7 +117,16 @@ describe('options controller', () => {
     expect(text('master-state')).toBe('运行中');
     expect(document.querySelector('#master-state')?.getAttribute('data-tone')).toBe('success');
     expect(document.querySelectorAll('[data-rule-id]').length).toBe(BUILT_IN_RULES.length);
-    expect(document.querySelectorAll('[data-rule-group]').length).toBe(4);
+    expect(document.querySelectorAll('#built-in-groups > .rule-row').length)
+      .toBe(BUILT_IN_RULES.length);
+    expect(document.querySelectorAll('#built-in-groups [data-rule-group]').length).toBe(0);
+    expect(document.querySelectorAll('#built-in-groups legend').length).toBe(0);
+    expect(document.querySelectorAll('#built-in-groups .group-description').length).toBe(0);
+    expect(document.querySelectorAll('#built-in-groups .empty-state').length).toBe(0);
+    expect(document.querySelector('#built-in-groups > [data-rule-row-for="core-sso"]'))
+      .not.toBeNull();
+    expect(document.querySelector('#built-in-groups > [data-rule-row-for="addon-youth-public"]'))
+      .not.toBeNull();
     const enabledRow = document.querySelector('[data-rule-id="core-sso"]')?.closest('.rule-row');
     expect(enabledRow?.getAttribute('data-state')).toBe('enabled');
     expect(enabledRow?.querySelector('.rule-state')?.textContent).toBe('已启用');
@@ -128,6 +143,10 @@ describe('options controller', () => {
 
     expect(text('master-state')).toBe('已停用');
     expect(document.querySelector('#master-state')?.getAttribute('data-tone')).toBe('muted');
+    const dependent = document.querySelector('[data-settings-dependent]');
+    expect(dependent?.classList.contains('is-disabled')).toBe(true);
+    expect(dependent?.getAttribute('aria-disabled')).toBe('true');
+    expect(checkbox('all-cqu-enabled').disabled).toBe(true);
   });
 
   it('marks a rule that background reconciliation skipped', async () => {
@@ -159,6 +178,19 @@ describe('options controller', () => {
     const row = document.querySelector('[data-rule-id="core-sso"]')?.closest('.rule-row');
     expect(row?.getAttribute('data-state')).toBe('disabled');
     expect(row?.querySelector('.rule-state')?.textContent).toBe('已停用');
+  });
+
+  it('preserves a built-in switch across a successful save so its transition can finish', async () => {
+    await initializeOptionsController(document, dependencies());
+    const toggle = document.querySelector('[data-rule-id="core-sso"]') as HTMLInputElement;
+
+    toggle.click();
+    await settle();
+
+    expect(document.querySelector('[data-rule-id="core-sso"]')).toBe(toggle);
+    expect(toggle.checked).toBe(false);
+    expect(toggle.closest('.rule-row')?.getAttribute('data-state')).toBe('disabled');
+    expect(toggle.closest('.rule-row')?.querySelector('.rule-state')?.textContent).toBe('已停用');
   });
 
   it('renders a default-off built-in as a locked accessible control that pending state cannot unlock', async () => {

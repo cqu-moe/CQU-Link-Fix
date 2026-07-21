@@ -1,8 +1,9 @@
 {
   "name": "cqu-link-fix",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "private": true,
   "type": "module",
+  "packageManager": "pnpm@11.15.1",
   "scripts": {
     "dev": "wxt",
     "build": "wxt build",
@@ -14,7 +15,14 @@
     "test:e2e": "pnpm build && playwright test",
     "verify": "pnpm typecheck && pnpm test && pnpm build"
   },
+  "dependencies": {
+    "react": "19.2.7",
+    "react-dom": "19.2.7"
+  },
   "devDependencies": {
+    "@types/react": "^19.2.14",
+    "@types/react-dom": "^19.2.3",
+    "@wxt-dev/module-react": "1.2.2",
     "@playwright/test": "^1.61.1",
     "@types/chrome": "^0.2.2",
     "@vitest/coverage-v8": "^4.1.10",

@@ -1,4 +1,4 @@
-export type RuleCategory = 'core' | 'important' | 'ip' | 'addon' | 'custom';
+export type RuleCategory = 'important' | 'ip' | 'addon' | 'custom';
 export type Transformer = 'atrust-domain' | 'atrust-ip-port' | 'youth-public';
 
 export type RuleMatcher =

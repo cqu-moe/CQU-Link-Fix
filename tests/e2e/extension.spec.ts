@@ -296,7 +296,7 @@ test.describe('rewrite records, UI, and original bypass', () => {
     await expect(popup.locator('#runtime-status')).toHaveText('扩展运行中');
     await expect(popup.locator('#status')).toHaveText('已通过 aTrust 打开');
     await expect(popup.locator('#route')).toContainText('sso.cqu.edu.cn');
-    await expect(popup.locator('#rule')).toHaveText('规则：core-sso');
+    await expect(popup.locator('#rule')).toHaveText('统一身份认证');
     await expect(popup.locator('#open-original')).toBeEnabled();
     await expect(popup.locator('#exclude-host')).toBeEnabled();
     await expect(popup.locator('#open-options')).toBeEnabled();
@@ -325,7 +325,7 @@ test.describe('rewrite records, UI, and original bypass', () => {
       targetUrl: rewritten,
     });
     const popup = await extension.openExtensionPage('popup.html');
-    await expect(popup.locator('#rule')).toHaveText('规则：addon-youth-public');
+    await expect(popup.locator('#rule')).toHaveText('团委官网链接');
     await popup.locator('#open-original').click();
     await expect.poll(() => page.url()).toBe(original);
     await expect.poll(() => sessionState(extension, tabId)).toEqual({ stored: {}, rules: [] });
@@ -370,7 +370,7 @@ test.describe('rewrite records, UI, and original bypass', () => {
     await expect(options.locator('[data-section-link]')).toHaveCount(4);
     const sections = options.locator('[data-console-section]');
     await expect(sections).toHaveCount(4);
-    for (const [index, name] of ['运行概览', '内置规则', '自定义规则', '暂停站点'].entries()) {
+    for (const [index, name] of ['全局状态', '内置规则', '自定义规则', '暂停站点'].entries()) {
       await expect(sections.nth(index)).toHaveAccessibleName(name);
     }
   });
@@ -461,22 +461,29 @@ test.describe('rewrite records, UI, and original bypass', () => {
     await options.evaluate(() => {
       const row = document.querySelector('[data-rule-row-for="geometry-custom"]');
       const remove = row?.querySelector('[data-delete-custom="geometry-custom"]');
-      if (!row || !remove) throw new Error('Missing custom rule geometry hooks');
+      const main = row?.querySelector('.rule-row__main');
+      if (!row || !remove || !main) throw new Error('Missing custom rule geometry hooks');
       const error = document.createElement('p');
       error.dataset.ruleValidationErrorFor = 'geometry-custom';
       error.textContent = '规则未加载：geometry fixture';
-      row.insertBefore(error, remove);
+      main.append(error);
     });
-    const customToggleBox = await options.locator('[data-custom-rule-id="geometry-custom"]')
-      .boundingBox();
-    const desktopDeleteBox = await options.locator('[data-delete-custom="geometry-custom"]')
-      .boundingBox();
-    expect(customToggleBox).not.toBeNull();
-    expect(desktopDeleteBox).not.toBeNull();
-    expect(Math.abs(
-      customToggleBox!.y + customToggleBox!.height / 2 -
-      (desktopDeleteBox!.y + desktopDeleteBox!.height / 2),
-    )).toBeLessThanOrEqual(1);
+    const desktopActionCenterDelta = await options.evaluate(() => {
+      const toggle = document.querySelector<HTMLElement>(
+        '[data-custom-rule-id="geometry-custom"]',
+      );
+      const remove = document.querySelector<HTMLElement>(
+        '[data-delete-custom="geometry-custom"]',
+      );
+      if (!toggle || !remove) throw new Error('Missing custom rule desktop actions');
+      const toggleBox = toggle.getBoundingClientRect();
+      const removeBox = remove.getBoundingClientRect();
+      return Math.abs(
+        toggleBox.y + toggleBox.height / 2 -
+        (removeBox.y + removeBox.height / 2),
+      );
+    });
+    expect(desktopActionCenterDelta).toBeLessThanOrEqual(1);
 
     await options.setViewportSize({ width: 1024, height: 900 });
     expect(await options.evaluate(
@@ -524,16 +531,17 @@ test.describe('rewrite records, UI, and original bypass', () => {
           `${width}px rule row ${index + 1} clips content`,
         ).toBeLessThanOrEqual(row.clientWidth);
       }
-      if (width === 1121) expect(geometry.customGridTrackCount).toBe(5);
+      if (width === 1121) expect(geometry.customGridTrackCount).toBe(2);
     }
 
     await options.setViewportSize({ width: 700, height: 900 });
+    const cssPixelMeasurementTolerance = 0.001;
     for (const controlId of ['master-enabled', 'all-cqu-enabled']) {
       const target = options.locator(`label[for="${controlId}"]`);
       const targetBox = await target.boundingBox();
       expect(targetBox, `${controlId} associated label target`).not.toBeNull();
       expect.soft(
-        targetBox!.height,
+        targetBox!.height + cssPixelMeasurementTolerance,
         `${controlId} associated label touch target height`,
       ).toBeGreaterThanOrEqual(44);
       expect.soft(

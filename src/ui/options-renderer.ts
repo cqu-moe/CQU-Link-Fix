@@ -65,6 +65,19 @@ export function renderOptionsControls(
   }
 }
 
+function renderDependentState(scope: Element, enabled: boolean): void {
+  for (const dependent of scope.querySelectorAll<HTMLElement>('[data-settings-dependent]')) {
+    dependent.classList.toggle('is-disabled', !enabled);
+    dependent.setAttribute('aria-disabled', String(!enabled));
+    for (const control of dependent.querySelectorAll('button, input')) {
+      if (control instanceof HTMLButtonElement || control instanceof HTMLInputElement) {
+        const locked = control instanceof HTMLInputElement && control.dataset.locked === 'true';
+        control.disabled = !enabled || locked;
+      }
+    }
+  }
+}
+
 function checkboxId(prefix: string, value: string): string {
   return `${prefix}-${value.replace(/[^a-zA-Z0-9_-]/g, '-')}`;
 }
@@ -84,6 +97,7 @@ function renderRuleToggle(
   const isCustom = rule.category === 'custom';
   const input = root.createElement('input');
   input.type = 'checkbox';
+  input.setAttribute('role', 'switch');
   input.id = checkboxId(isCustom ? 'custom-enabled' : 'built-in-enabled', rule.id);
   input.checked = rule.enabled;
   if (isCustom) input.dataset.customRuleId = rule.id;
@@ -127,12 +141,13 @@ function renderRuleCard(
   article.dataset.state = presentation.state;
 
   const lead = root.createElement('div');
-  lead.className = 'rule-row__lead';
+  lead.className = 'rule-row__main';
   const input = renderRuleToggle(root, rule, handlers);
+  const title = root.createElement('div');
+  title.className = 'rule-row__title';
   const label = root.createElement('label');
   label.htmlFor = input.id;
   label.textContent = rule.name;
-  lead.append(input, label);
 
   const description = root.createElement('p');
   description.className = 'rule-row__description';
@@ -145,7 +160,8 @@ function renderRuleCard(
   const state = root.createElement('span');
   state.className = 'rule-state';
   state.textContent = presentation.label;
-  article.append(lead, description, range, state);
+  title.append(label, state);
+  lead.append(title, description, range);
 
   if (rule.validationError) {
     const validationError = root.createElement('p');
@@ -154,7 +170,7 @@ function renderRuleCard(
     validationError.dataset.ruleValidationErrorFor = rule.id;
     validationError.textContent = '规则未加载：' + rule.validationError;
     input.setAttribute('aria-describedby', validationError.id);
-    article.append(validationError);
+    lead.append(validationError);
   }
   if (rule.locked && rule.lockReason) {
     const lockReason = root.createElement('p');
@@ -164,18 +180,23 @@ function renderRuleCard(
     lockReason.textContent = rule.lockReason;
     const describedBy = input.getAttribute('aria-describedby');
     input.setAttribute('aria-describedby', [describedBy, lockReason.id].filter(Boolean).join(' '));
-    article.append(lockReason);
+    lead.append(lockReason);
   }
+
+  const actions = root.createElement('div');
+  actions.className = 'rule-row__actions';
   if (isCustom) {
     const remove = root.createElement('button');
     remove.type = 'button';
-    remove.className = 'danger-button';
+    remove.className = 'button button--small danger-button';
     remove.dataset.deleteCustom = rule.id;
     remove.textContent = '删除';
     remove.setAttribute('aria-label', '删除自定义规则 ' + rule.name);
     remove.addEventListener('click', () => handlers.deleteCustomRule(rule));
-    article.append(remove);
+    actions.append(remove);
   }
+  actions.append(input);
+  article.append(lead, actions);
   return article;
 }
 
@@ -206,23 +227,11 @@ export function renderOptionsContent(
   elements.allCqu.checked = snapshot.settings.enableAllCquDomains;
 
   const model = buildOptionsModel(snapshot.settings, builtInRules, validationErrors);
-  const groupNodes = model.groups.map((group) => {
-    const fieldset = root.createElement('fieldset');
-    fieldset.dataset.ruleGroup = group.category;
-    const legend = root.createElement('legend');
-    legend.textContent = group.label;
-    const description = root.createElement('p');
-    description.className = 'group-description';
-    description.textContent = group.description;
-    fieldset.append(legend, description);
-    if (group.rules.length === 0) {
-      appendEmptyState(root, fieldset, '当前版本暂无此类内置规则。');
-    } else {
-      for (const rule of group.rules) fieldset.append(renderRuleCard(root, rule, handlers));
-    }
-    return fieldset;
-  });
-  elements.groups.replaceChildren(...groupNodes);
+  const ruleNodes = model.rules.map((rule) => renderRuleCard(root, rule, handlers));
+  elements.groups.replaceChildren(...ruleNodes);
+  if (ruleNodes.length === 0) {
+    appendEmptyState(root, elements.groups, '当前版本暂无内置规则。');
+  }
 
   const validationByRuleId = new Map(
     validationErrors.map((error) => [error.ruleId, error.message]),
@@ -247,6 +256,7 @@ export function renderOptionsContent(
     value.textContent = host;
     const remove = root.createElement('button');
     remove.type = 'button';
+    remove.className = 'button button--small';
     remove.dataset.removeExcluded = host;
     remove.textContent = '恢复改写';
     remove.setAttribute('aria-label', `从排除名单移除 ${host}`);
@@ -259,4 +269,5 @@ export function renderOptionsContent(
     appendEmptyState(root, elements.excludedList, '没有暂停的站点。');
   }
   renderOptionsControls(scope, pending, true);
+  if (!pending) renderDependentState(scope, snapshot.settings.enabled);
 }

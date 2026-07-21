@@ -4,8 +4,10 @@ import { describe, expect, it } from 'vitest';
 
 const files = [
   'entrypoints/options/main.ts',
+  'entrypoints/options/App.tsx',
   'src/ui/options-controller.ts',
   'entrypoints/popup/main.ts',
+  'entrypoints/popup/App.tsx',
   'src/ui/popup-controller.ts',
 ];
 
@@ -51,7 +53,7 @@ describe('settings UI dependency boundary', () => {
       'utf8',
     );
     const entrypoint = await readFile(
-      resolve(process.cwd(), 'entrypoints/options/main.ts'),
+      resolve(process.cwd(), 'entrypoints/options/App.tsx'),
       'utf8',
     );
 

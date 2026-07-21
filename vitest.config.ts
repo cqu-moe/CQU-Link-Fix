@@ -6,6 +6,7 @@ export default defineConfig({
   test: {
     environment: 'happy-dom',
     restoreMocks: true,
-    exclude: [...configDefaults.exclude, 'tests/e2e/**'],
+    include: ['tests/unit/**/*.test.ts'],
+    exclude: [...configDefaults.exclude, '.worktrees/**', 'tests/e2e/**'],
   },
 });
