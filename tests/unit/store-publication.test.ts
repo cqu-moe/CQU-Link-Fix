@@ -19,4 +19,28 @@ describe('store publication documents', () => {
     expect(policy).toContain('Chrome Web Store User Data Policy');
     expect(policy).toContain('https://github.com/cqu-moe/CQU-Link-Fix/issues');
   });
+
+  it('keeps paste-ready store copy, disclosures, reviewer notes, and checklist complete', async () => {
+    const [listing, disclosures, reviewer, checklist] = await Promise.all([
+      read('docs/store/listing-copy.md'),
+      read('docs/store/privacy-and-permissions.md'),
+      read('docs/store/reviewer-instructions.md'),
+      read('docs/store/submission-checklist.md'),
+    ]);
+
+    expect(listing).toContain('在本机修正重庆大学相关网站的顶层导航链接');
+    expect(listing).toContain('Independent community project');
+    expect(disclosures).toContain('declarativeNetRequestWithHostAccess');
+    expect(disclosures).toContain('Web browsing activity');
+    expect(disclosures).toContain('Remote code');
+    expect(reviewer).toContain('无需扩展账号');
+    expect(reviewer).toContain('Do not provide personal CQU credentials');
+    expect(checklist).toContain(
+      'https://github.com/cqu-moe/CQU-Link-Fix/blob/main/PRIVACY.md',
+    );
+
+    for (const document of [listing, disclosures, reviewer, checklist]) {
+      expect(document).not.toMatch(/\b(?:TBD|TODO|PLACEHOLDER)\b/i);
+    }
+  });
 });
