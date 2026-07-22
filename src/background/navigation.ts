@@ -48,6 +48,7 @@ export function decideAllCquRewrite(
 
   const host = url.hostname.toLowerCase();
   if (isExcludedHost(host, settings.excludedHosts)) return null;
+  if (host === 'youth.cqu.edu.cn' && url.pathname === '/content.jsp') return null;
 
   try {
     if (isAtrustUrl(details.url) || !isCquDomain(details.url)) return null;

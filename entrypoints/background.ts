@@ -19,6 +19,7 @@ import {
   type BackgroundResponse,
 } from '../src/messages';
 import { decideRegisteredRewrite, getEnabledRules } from '../src/rules/registry';
+import { BUILT_IN_RULES } from '../src/rules/builtins';
 import {
   compareRulePrecedence,
   persistedDnrOwnsRewrite,
@@ -189,7 +190,11 @@ async function rewriteTopFrameNavigation(
   let record: RewriteRecord | null = null;
 
   if (decision && winningRule) {
+    const packagedStaticOwnsRewrite = BUILT_IN_RULES.some((builtIn) =>
+      builtIn.id === winningRule.id && builtIn.dnrId === winningRule.dnrId,
+    ) && matcherDnrHandlesUrl(winningRule.matcher, url);
     const needsStartupFallback = startedBeforeDnrReady &&
+      !packagedStaticOwnsRewrite &&
       (startupEvidence === null || !persistedDnrOwnsRewrite(
         startupEvidence.previousDynamicRules,
         startupEvidence.compiledDynamicRules,

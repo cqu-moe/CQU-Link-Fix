@@ -1,0 +1,44 @@
+[
+  {
+    "id": 1001,
+    "priority": 10,
+    "action": {
+      "type": "redirect",
+      "redirect": {
+        "regexSubstitution": "https://sso-cqu-edu-cn-s.atrust.cqu.edu.cn\\1"
+      }
+    },
+    "condition": {
+      "regexFilter": "^(?:http://sso\\.cqu\\.edu\\.cn(?::80)?|https://sso\\.cqu\\.edu\\.cn(?::443)?)((?:[/?].*)?)$",
+      "isUrlFilterCaseSensitive": false,
+      "resourceTypes": ["main_frame"]
+    }
+  },
+  {
+    "id": 2001,
+    "priority": 20,
+    "action": {
+      "type": "redirect",
+      "redirect": {
+        "regexSubstitution": "https://youth.cqu.edu.cn/content.jsp?urltype=news.NewsContentUrl&wbtreeid=\\1&wbnewsid=\\2\\3"
+      }
+    },
+    "condition": {
+      "regexFilter": "^(?:http://youth\\.cqu\\.edu\\.cn(?::80)?|https://youth\\.cqu\\.edu\\.cn(?::443)?)/info/(\\d+)/(\\d+)\\.htm(?:\\?)?(#.*)?$",
+      "isUrlFilterCaseSensitive": false,
+      "resourceTypes": ["main_frame"]
+    }
+  },
+  {
+    "id": 999999999,
+    "priority": 2000000,
+    "action": {
+      "type": "allow"
+    },
+    "condition": {
+      "regexFilter": "^https?://[^?#]+\\?(?:[^#&]*&)*(?:t|%74)(?:i|%69)(?:c|%63)(?:k|%6[bB])(?:e|%65)(?:t|%74)(?:=[^#&]*)?(?:&[^#&]*)*(?:#.*)?$",
+      "isUrlFilterCaseSensitive": true,
+      "resourceTypes": ["main_frame"]
+    }
+  }
+]

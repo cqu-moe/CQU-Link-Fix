@@ -1,6 +1,7 @@
 import type { Browser } from 'wxt/browser';
 import { loadSettings } from '../storage/settings-repository';
 import type { ExtensionSettings } from '../storage/settings-types';
+import { BUILT_IN_RULES } from './builtins';
 import { getEnabledRules } from './registry';
 import {
   recordDnrReconciliationStatus,
@@ -15,11 +16,15 @@ import {
 import type { RuleDefinition } from './types';
 
 const ALLOW_ID_START = 80_000;
+const DISABLED_STATIC_ALLOW_ID_START = 900_001;
+const DISABLED_STATIC_ALLOW_PRIORITY = 50_000;
+const STATIC_BUILT_IN_RULESET_ID = 'built_in_defaults';
+const STATIC_ALL_CQU_RULESET_ID = 'all_cqu_domains';
 const TICKET_ALLOW_ID = 999_999_999;
 const TICKET_ALLOW_PRIORITY = 2_000_000;
 const MAX_RULE_ID = 2_147_483_647;
 const MAX_REDIRECT_PRIORITY = 99_999;
-const MIN_REDIRECT_PRIORITY = 1;
+const MIN_REDIRECT_PRIORITY = DISABLED_STATIC_ALLOW_PRIORITY + 1;
 const MAIN_FRAME: NonNullable<Browser.declarativeNetRequest.RuleCondition['resourceTypes']> = [
   'main_frame',
 ];
@@ -64,6 +69,29 @@ function compileAllows(excludedHosts: readonly string[]): Browser.declarativeNet
   }));
 }
 
+function compileDisabledStaticAllows(
+  disabledBuiltInRuleIds: readonly string[],
+): Browser.declarativeNetRequest.Rule[] {
+  const disabled = new Set(disabledBuiltInRuleIds);
+  return BUILT_IN_RULES.flatMap((definition, index) => {
+    if (!disabled.has(definition.id)) return [];
+    const redirects = compileMatcherRedirects(
+      definition.matcher,
+      definition.dnrId,
+      DISABLED_STATIC_ALLOW_PRIORITY,
+    );
+    if (redirects.length !== 1) {
+      throw new Error(`Packaged built-in ${definition.id} must compile to exactly one rule`);
+    }
+    return [{
+      id: DISABLED_STATIC_ALLOW_ID_START + index,
+      priority: DISABLED_STATIC_ALLOW_PRIORITY,
+      action: { type: 'allow' as const },
+      condition: redirects[0]!.condition,
+    }];
+  });
+}
+
 function compileTicketAllow(): Browser.declarativeNetRequest.Rule {
   return {
     id: TICKET_ALLOW_ID,
@@ -97,6 +125,7 @@ interface DynamicRuleCompilationPlan {
 function planDynamicRuleCompilation(
   rules: readonly RuleDefinition[],
   excludedHosts: readonly string[],
+  disabledBuiltInRuleIds: readonly string[] = [],
 ): DynamicRuleCompilationPlan {
   const priorityCapacity = MAX_REDIRECT_PRIORITY - MIN_REDIRECT_PRIORITY + 1;
   if (rules.length > priorityCapacity) {
@@ -106,7 +135,11 @@ function planDynamicRuleCompilation(
   const priorities = new Map(
     ordered.map((rule, index) => [rule, MAX_REDIRECT_PRIORITY - index]),
   );
-  const globalRules = [...compileAllows(excludedHosts), compileTicketAllow()];
+  const globalRules = [
+    ...compileAllows(excludedHosts),
+    ...compileDisabledStaticAllows(disabledBuiltInRuleIds),
+    compileTicketAllow(),
+  ];
   assertUniqueRuleIds(globalRules);
   return { globalRules, priorities };
 }
@@ -114,8 +147,13 @@ function planDynamicRuleCompilation(
 export function compileDynamicRules(
   rules: readonly RuleDefinition[],
   excludedHosts: readonly string[],
+  disabledBuiltInRuleIds: readonly string[] = [],
 ): Browser.declarativeNetRequest.Rule[] {
-  const { globalRules, priorities } = planDynamicRuleCompilation(rules, excludedHosts);
+  const { globalRules, priorities } = planDynamicRuleCompilation(
+    rules,
+    excludedHosts,
+    disabledBuiltInRuleIds,
+  );
   const [ticketAllow] = globalRules.slice(-1);
   const compiled = [
     ...globalRules.slice(0, -1),
@@ -244,14 +282,44 @@ function compilationErrorMessage(error: unknown): string {
     : 'Unknown DNR compilation error';
 }
 
+async function reconcileStaticRules(settings: ExtensionSettings): Promise<void> {
+  if (typeof browser.declarativeNetRequest.updateStaticRules === 'function') {
+    const disabled = new Set(settings.disabledRuleIds);
+    const disableRuleIds = BUILT_IN_RULES
+      .filter((rule) => !settings.enabled || disabled.has(rule.id))
+      .map((rule) => rule.dnrId);
+    const enableRuleIds = BUILT_IN_RULES
+      .filter((rule) => settings.enabled && !disabled.has(rule.id))
+      .map((rule) => rule.dnrId);
+    await browser.declarativeNetRequest.updateStaticRules({
+      rulesetId: STATIC_BUILT_IN_RULESET_ID,
+      disableRuleIds,
+      enableRuleIds,
+    });
+  }
+
+  if (typeof browser.declarativeNetRequest.updateEnabledRulesets === 'function') {
+    const allCquEnabled = settings.enabled && settings.enableAllCquDomains;
+    await browser.declarativeNetRequest.updateEnabledRulesets({
+      enableRulesetIds: allCquEnabled ? [STATIC_ALL_CQU_RULESET_ID] : [],
+      disableRulesetIds: allCquEnabled ? [] : [STATIC_ALL_CQU_RULESET_ID],
+    });
+  }
+}
+
 export async function reconcileDynamicRules(
   settingsInput?: ExtensionSettings,
 ): Promise<DnrReconciliationEvidence> {
   const settings = settingsInput ?? await loadSettings();
+  await reconcileStaticRules(settings);
   const enabledRules = getEnabledRules(settings);
+  const disabledBuiltInRuleIds = BUILT_IN_RULES
+    .filter((rule) => !settings.enabled || settings.disabledRuleIds.includes(rule.id))
+    .map((rule) => rule.id);
   const { globalRules, priorities } = planDynamicRuleCompilation(
     enabledRules,
     settings.excludedHosts,
+    disabledBuiltInRuleIds,
   );
   const validationErrors: RuleValidationError[] = [];
   const candidates: Array<{

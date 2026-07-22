@@ -1,0 +1,344 @@
+[
+  {
+    "id": 3997,
+    "priority": 100,
+    "action": {
+      "type": "allow"
+    },
+    "condition": {
+      "regexFilter": "^https?://youth\\.cqu\\.edu\\.cn(?::\\d+)?/info/\\d+/\\d+\\.htm\\?",
+      "isUrlFilterCaseSensitive": false,
+      "resourceTypes": ["main_frame"]
+    }
+  },
+  {
+    "id": 3998,
+    "priority": 100,
+    "action": {
+      "type": "allow"
+    },
+    "condition": {
+      "regexFilter": "^https?://youth\\.cqu\\.edu\\.cn(?::\\d+)?/content\\.jsp(?:[?#]|$)",
+      "isUrlFilterCaseSensitive": false,
+      "resourceTypes": ["main_frame"]
+    }
+  },
+  {
+    "id": 3999,
+    "priority": 2000000,
+    "action": {
+      "type": "allow"
+    },
+    "condition": {
+      "regexFilter": "^https?://(?:[a-z\\d](?:[a-z\\d-]{0,61}[a-z\\d])?\\.)*atrust\\.cqu\\.edu\\.cn(?::\\d+)?(?:[/?]|$)",
+      "isUrlFilterCaseSensitive": false,
+      "resourceTypes": ["main_frame"]
+    }
+  },
+  {
+    "id": 3001,
+    "priority": 1,
+    "action": {
+      "type": "redirect",
+      "redirect": {
+        "regexSubstitution": "https://cqu-edu-cn-s.atrust.cqu.edu.cn\\1"
+      }
+    },
+    "condition": {
+      "regexFilter": "^http://cqu\\.edu\\.cn(?::80)?((?:[/?].*)?)$",
+      "isUrlFilterCaseSensitive": false,
+      "resourceTypes": [
+        "main_frame"
+      ]
+    }
+  },
+  {
+    "id": 3002,
+    "priority": 1,
+    "action": {
+      "type": "redirect",
+      "redirect": {
+        "regexSubstitution": "https://cqu-edu-cn-s.atrust.cqu.edu.cn\\1"
+      }
+    },
+    "condition": {
+      "regexFilter": "^https://cqu\\.edu\\.cn(?::443)?((?:[/?].*)?)$",
+      "isUrlFilterCaseSensitive": false,
+      "resourceTypes": [
+        "main_frame"
+      ]
+    }
+  },
+  {
+    "id": 3003,
+    "priority": 1,
+    "action": {
+      "type": "redirect",
+      "redirect": {
+        "regexSubstitution": "https://\\1-cqu-edu-cn-s.atrust.cqu.edu.cn\\2"
+      }
+    },
+    "condition": {
+      "regexFilter": "^http://([a-z\\d](?:[a-z\\d-]{0,61}[a-z\\d])?)\\.cqu\\.edu\\.cn(?::80)?((?:[/?].*)?)$",
+      "isUrlFilterCaseSensitive": false,
+      "resourceTypes": [
+        "main_frame"
+      ]
+    }
+  },
+  {
+    "id": 3004,
+    "priority": 1,
+    "action": {
+      "type": "redirect",
+      "redirect": {
+        "regexSubstitution": "https://\\1-cqu-edu-cn-s.atrust.cqu.edu.cn\\2"
+      }
+    },
+    "condition": {
+      "regexFilter": "^https://([a-z\\d](?:[a-z\\d-]{0,61}[a-z\\d])?)\\.cqu\\.edu\\.cn(?::443)?((?:[/?].*)?)$",
+      "isUrlFilterCaseSensitive": false,
+      "resourceTypes": [
+        "main_frame"
+      ]
+    }
+  },
+  {
+    "id": 3005,
+    "priority": 1,
+    "action": {
+      "type": "redirect",
+      "redirect": {
+        "regexSubstitution": "https://\\1-\\2-cqu-edu-cn-s.atrust.cqu.edu.cn\\3"
+      }
+    },
+    "condition": {
+      "regexFilter": "^http://([a-z\\d](?:[a-z\\d-]{0,61}[a-z\\d])?)\\.([a-z\\d](?:[a-z\\d-]{0,61}[a-z\\d])?)\\.cqu\\.edu\\.cn(?::80)?((?:[/?].*)?)$",
+      "isUrlFilterCaseSensitive": false,
+      "resourceTypes": [
+        "main_frame"
+      ]
+    }
+  },
+  {
+    "id": 3006,
+    "priority": 1,
+    "action": {
+      "type": "redirect",
+      "redirect": {
+        "regexSubstitution": "https://\\1-\\2-cqu-edu-cn-s.atrust.cqu.edu.cn\\3"
+      }
+    },
+    "condition": {
+      "regexFilter": "^https://([a-z\\d](?:[a-z\\d-]{0,61}[a-z\\d])?)\\.([a-z\\d](?:[a-z\\d-]{0,61}[a-z\\d])?)\\.cqu\\.edu\\.cn(?::443)?((?:[/?].*)?)$",
+      "isUrlFilterCaseSensitive": false,
+      "resourceTypes": [
+        "main_frame"
+      ]
+    }
+  },
+  {
+    "id": 3007,
+    "priority": 1,
+    "action": {
+      "type": "redirect",
+      "redirect": {
+        "regexSubstitution": "https://\\1-\\2-\\3-cqu-edu-cn-s.atrust.cqu.edu.cn\\4"
+      }
+    },
+    "condition": {
+      "regexFilter": "^http://([a-z\\d](?:[a-z\\d-]{0,61}[a-z\\d])?)\\.([a-z\\d](?:[a-z\\d-]{0,61}[a-z\\d])?)\\.([a-z\\d](?:[a-z\\d-]{0,61}[a-z\\d])?)\\.cqu\\.edu\\.cn(?::80)?((?:[/?].*)?)$",
+      "isUrlFilterCaseSensitive": false,
+      "resourceTypes": [
+        "main_frame"
+      ]
+    }
+  },
+  {
+    "id": 3008,
+    "priority": 1,
+    "action": {
+      "type": "redirect",
+      "redirect": {
+        "regexSubstitution": "https://\\1-\\2-\\3-cqu-edu-cn-s.atrust.cqu.edu.cn\\4"
+      }
+    },
+    "condition": {
+      "regexFilter": "^https://([a-z\\d](?:[a-z\\d-]{0,61}[a-z\\d])?)\\.([a-z\\d](?:[a-z\\d-]{0,61}[a-z\\d])?)\\.([a-z\\d](?:[a-z\\d-]{0,61}[a-z\\d])?)\\.cqu\\.edu\\.cn(?::443)?((?:[/?].*)?)$",
+      "isUrlFilterCaseSensitive": false,
+      "resourceTypes": [
+        "main_frame"
+      ]
+    }
+  },
+  {
+    "id": 3009,
+    "priority": 1,
+    "action": {
+      "type": "redirect",
+      "redirect": {
+        "regexSubstitution": "https://\\1-\\2-\\3-\\4-cqu-edu-cn-s.atrust.cqu.edu.cn\\5"
+      }
+    },
+    "condition": {
+      "regexFilter": "^http://([a-z\\d](?:[a-z\\d-]{0,61}[a-z\\d])?)\\.([a-z\\d](?:[a-z\\d-]{0,61}[a-z\\d])?)\\.([a-z\\d](?:[a-z\\d-]{0,61}[a-z\\d])?)\\.([a-z\\d](?:[a-z\\d-]{0,61}[a-z\\d])?)\\.cqu\\.edu\\.cn(?::80)?((?:[/?].*)?)$",
+      "isUrlFilterCaseSensitive": false,
+      "resourceTypes": [
+        "main_frame"
+      ]
+    }
+  },
+  {
+    "id": 3010,
+    "priority": 1,
+    "action": {
+      "type": "redirect",
+      "redirect": {
+        "regexSubstitution": "https://\\1-\\2-\\3-\\4-cqu-edu-cn-s.atrust.cqu.edu.cn\\5"
+      }
+    },
+    "condition": {
+      "regexFilter": "^https://([a-z\\d](?:[a-z\\d-]{0,61}[a-z\\d])?)\\.([a-z\\d](?:[a-z\\d-]{0,61}[a-z\\d])?)\\.([a-z\\d](?:[a-z\\d-]{0,61}[a-z\\d])?)\\.([a-z\\d](?:[a-z\\d-]{0,61}[a-z\\d])?)\\.cqu\\.edu\\.cn(?::443)?((?:[/?].*)?)$",
+      "isUrlFilterCaseSensitive": false,
+      "resourceTypes": [
+        "main_frame"
+      ]
+    }
+  },
+  {
+    "id": 3011,
+    "priority": 1,
+    "action": {
+      "type": "redirect",
+      "redirect": {
+        "regexSubstitution": "https://\\1-\\2-\\3-\\4-\\5-cqu-edu-cn-s.atrust.cqu.edu.cn\\6"
+      }
+    },
+    "condition": {
+      "regexFilter": "^http://([a-z\\d](?:[a-z\\d-]{0,61}[a-z\\d])?)\\.([a-z\\d](?:[a-z\\d-]{0,61}[a-z\\d])?)\\.([a-z\\d](?:[a-z\\d-]{0,61}[a-z\\d])?)\\.([a-z\\d](?:[a-z\\d-]{0,61}[a-z\\d])?)\\.([a-z\\d](?:[a-z\\d-]{0,61}[a-z\\d])?)\\.cqu\\.edu\\.cn(?::80)?((?:[/?].*)?)$",
+      "isUrlFilterCaseSensitive": false,
+      "resourceTypes": [
+        "main_frame"
+      ]
+    }
+  },
+  {
+    "id": 3012,
+    "priority": 1,
+    "action": {
+      "type": "redirect",
+      "redirect": {
+        "regexSubstitution": "https://\\1-\\2-\\3-\\4-\\5-cqu-edu-cn-s.atrust.cqu.edu.cn\\6"
+      }
+    },
+    "condition": {
+      "regexFilter": "^https://([a-z\\d](?:[a-z\\d-]{0,61}[a-z\\d])?)\\.([a-z\\d](?:[a-z\\d-]{0,61}[a-z\\d])?)\\.([a-z\\d](?:[a-z\\d-]{0,61}[a-z\\d])?)\\.([a-z\\d](?:[a-z\\d-]{0,61}[a-z\\d])?)\\.([a-z\\d](?:[a-z\\d-]{0,61}[a-z\\d])?)\\.cqu\\.edu\\.cn(?::443)?((?:[/?].*)?)$",
+      "isUrlFilterCaseSensitive": false,
+      "resourceTypes": [
+        "main_frame"
+      ]
+    }
+  },
+  {
+    "id": 3013,
+    "priority": 1,
+    "action": {
+      "type": "redirect",
+      "redirect": {
+        "regexSubstitution": "https://\\1-\\2-\\3-\\4-\\5-\\6-cqu-edu-cn-s.atrust.cqu.edu.cn\\7"
+      }
+    },
+    "condition": {
+      "regexFilter": "^http://([a-z\\d](?:[a-z\\d-]{0,61}[a-z\\d])?)\\.([a-z\\d](?:[a-z\\d-]{0,61}[a-z\\d])?)\\.([a-z\\d](?:[a-z\\d-]{0,61}[a-z\\d])?)\\.([a-z\\d](?:[a-z\\d-]{0,61}[a-z\\d])?)\\.([a-z\\d](?:[a-z\\d-]{0,61}[a-z\\d])?)\\.([a-z\\d](?:[a-z\\d-]{0,61}[a-z\\d])?)\\.cqu\\.edu\\.cn(?::80)?((?:[/?].*)?)$",
+      "isUrlFilterCaseSensitive": false,
+      "resourceTypes": [
+        "main_frame"
+      ]
+    }
+  },
+  {
+    "id": 3014,
+    "priority": 1,
+    "action": {
+      "type": "redirect",
+      "redirect": {
+        "regexSubstitution": "https://\\1-\\2-\\3-\\4-\\5-\\6-cqu-edu-cn-s.atrust.cqu.edu.cn\\7"
+      }
+    },
+    "condition": {
+      "regexFilter": "^https://([a-z\\d](?:[a-z\\d-]{0,61}[a-z\\d])?)\\.([a-z\\d](?:[a-z\\d-]{0,61}[a-z\\d])?)\\.([a-z\\d](?:[a-z\\d-]{0,61}[a-z\\d])?)\\.([a-z\\d](?:[a-z\\d-]{0,61}[a-z\\d])?)\\.([a-z\\d](?:[a-z\\d-]{0,61}[a-z\\d])?)\\.([a-z\\d](?:[a-z\\d-]{0,61}[a-z\\d])?)\\.cqu\\.edu\\.cn(?::443)?((?:[/?].*)?)$",
+      "isUrlFilterCaseSensitive": false,
+      "resourceTypes": [
+        "main_frame"
+      ]
+    }
+  },
+  {
+    "id": 3015,
+    "priority": 1,
+    "action": {
+      "type": "redirect",
+      "redirect": {
+        "regexSubstitution": "https://\\1-\\2-\\3-\\4-\\5-\\6-\\7-cqu-edu-cn-s.atrust.cqu.edu.cn\\8"
+      }
+    },
+    "condition": {
+      "regexFilter": "^http://([a-z\\d](?:[a-z\\d-]{0,61}[a-z\\d])?)\\.([a-z\\d](?:[a-z\\d-]{0,61}[a-z\\d])?)\\.([a-z\\d](?:[a-z\\d-]{0,61}[a-z\\d])?)\\.([a-z\\d](?:[a-z\\d-]{0,61}[a-z\\d])?)\\.([a-z\\d](?:[a-z\\d-]{0,61}[a-z\\d])?)\\.([a-z\\d](?:[a-z\\d-]{0,61}[a-z\\d])?)\\.([a-z\\d](?:[a-z\\d-]{0,61}[a-z\\d])?)\\.cqu\\.edu\\.cn(?::80)?((?:[/?].*)?)$",
+      "isUrlFilterCaseSensitive": false,
+      "resourceTypes": [
+        "main_frame"
+      ]
+    }
+  },
+  {
+    "id": 3016,
+    "priority": 1,
+    "action": {
+      "type": "redirect",
+      "redirect": {
+        "regexSubstitution": "https://\\1-\\2-\\3-\\4-\\5-\\6-\\7-cqu-edu-cn-s.atrust.cqu.edu.cn\\8"
+      }
+    },
+    "condition": {
+      "regexFilter": "^https://([a-z\\d](?:[a-z\\d-]{0,61}[a-z\\d])?)\\.([a-z\\d](?:[a-z\\d-]{0,61}[a-z\\d])?)\\.([a-z\\d](?:[a-z\\d-]{0,61}[a-z\\d])?)\\.([a-z\\d](?:[a-z\\d-]{0,61}[a-z\\d])?)\\.([a-z\\d](?:[a-z\\d-]{0,61}[a-z\\d])?)\\.([a-z\\d](?:[a-z\\d-]{0,61}[a-z\\d])?)\\.([a-z\\d](?:[a-z\\d-]{0,61}[a-z\\d])?)\\.cqu\\.edu\\.cn(?::443)?((?:[/?].*)?)$",
+      "isUrlFilterCaseSensitive": false,
+      "resourceTypes": [
+        "main_frame"
+      ]
+    }
+  },
+  {
+    "id": 3017,
+    "priority": 1,
+    "action": {
+      "type": "redirect",
+      "redirect": {
+        "regexSubstitution": "https://\\1-\\2-\\3-\\4-\\5-\\6-\\7-\\8-cqu-edu-cn-s.atrust.cqu.edu.cn\\9"
+      }
+    },
+    "condition": {
+      "regexFilter": "^http://([a-z\\d](?:[a-z\\d-]{0,61}[a-z\\d])?)\\.([a-z\\d](?:[a-z\\d-]{0,61}[a-z\\d])?)\\.([a-z\\d](?:[a-z\\d-]{0,61}[a-z\\d])?)\\.([a-z\\d](?:[a-z\\d-]{0,61}[a-z\\d])?)\\.([a-z\\d](?:[a-z\\d-]{0,61}[a-z\\d])?)\\.([a-z\\d](?:[a-z\\d-]{0,61}[a-z\\d])?)\\.([a-z\\d](?:[a-z\\d-]{0,61}[a-z\\d])?)\\.([a-z\\d](?:[a-z\\d-]{0,61}[a-z\\d])?)\\.cqu\\.edu\\.cn(?::80)?((?:[/?].*)?)$",
+      "isUrlFilterCaseSensitive": false,
+      "resourceTypes": [
+        "main_frame"
+      ]
+    }
+  },
+  {
+    "id": 3018,
+    "priority": 1,
+    "action": {
+      "type": "redirect",
+      "redirect": {
+        "regexSubstitution": "https://\\1-\\2-\\3-\\4-\\5-\\6-\\7-\\8-cqu-edu-cn-s.atrust.cqu.edu.cn\\9"
+      }
+    },
+    "condition": {
+      "regexFilter": "^https://([a-z\\d](?:[a-z\\d-]{0,61}[a-z\\d])?)\\.([a-z\\d](?:[a-z\\d-]{0,61}[a-z\\d])?)\\.([a-z\\d](?:[a-z\\d-]{0,61}[a-z\\d])?)\\.([a-z\\d](?:[a-z\\d-]{0,61}[a-z\\d])?)\\.([a-z\\d](?:[a-z\\d-]{0,61}[a-z\\d])?)\\.([a-z\\d](?:[a-z\\d-]{0,61}[a-z\\d])?)\\.([a-z\\d](?:[a-z\\d-]{0,61}[a-z\\d])?)\\.([a-z\\d](?:[a-z\\d-]{0,61}[a-z\\d])?)\\.cqu\\.edu\\.cn(?::443)?((?:[/?].*)?)$",
+      "isUrlFilterCaseSensitive": false,
+      "resourceTypes": [
+        "main_frame"
+      ]
+    }
+  }
+]

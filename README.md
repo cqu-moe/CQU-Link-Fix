@@ -44,8 +44,8 @@
 
 - `storage`：在本机保存设置、内置规则覆盖、自定义规则和排除项。
 - `activeTab`：让弹窗说明当前标签页并执行用户主动触发的一次性原地址打开或暂停操作。
-- `declarativeNetRequestWithHostAccess`：在顶层请求发出前应用精确重定向、排除和一次性绕过规则。
-- `webNavigation`：记录顶层导航结果，并处理无法由固定规则表达的可选全 CQU 模式。
+- `declarativeNetRequestWithHostAccess`：在顶层请求发出前应用内置重定向、用户精确规则、已授权的全 CQU 预置规则、排除和一次性绕过。
+- `webNavigation`：记录顶层导航结果，并为带额外查询参数的团委链接、超过预置捕获深度的全 CQU 域名等情况执行后台回退。
 - 必需主机权限只包含 SSO、团委来源和 SSO aTrust 目标；`cqu.edu.cn`/`*.cqu.edu.cn` 是用户开启全域模式时才请求的可选权限。
 
 生成的 Manifest 不要求 `<all_urls>`，也不声明浏览历史、Cookie 或请求体权限。

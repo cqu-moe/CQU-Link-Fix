@@ -9,6 +9,7 @@
 - 后续 `cc8c1917131d01c5710b7a04071cf1684469d5d2` 与 `82aafd054e88c7c9c538d916d5131e640164fbd5` 增加并校准了顶层 CAS `ticket` 的高优先级 allow 防护；这些改动通过单元测试和 loaded-Chromium E2E 验证，但没有重新执行本页真实网络烟测。因此不得把本页结果表述为最终 HEAD 的 live PASS。
 - 2026-07-13 在本文所在提交重新运行 production build + loaded-extension Playwright：16 条自动化用例 PASS，浏览器原生可选权限批准/拒绝的 2 条 headed 人工用例默认 SKIP。新增自动化覆盖链接点击、真实 HTTP 302 响应触发的 CAS 导航、前进/后退无循环、停用内置规则后重启 service worker 仍保留选择，以及 Popup 运行状态。该证据使用本地 fixture，不属于下表的真实网络 PASS。
 - 2026-07-22 用户确认团委链接修正规则已在其实际浏览器使用中正常工作。该确认没有附带可公开的网络位置、HTTP 响应或脱敏截图，因此在本文中记为 `USER-VERIFIED`，不反向修改 2026-07-12 特定网络会话的历史 `FAIL` 行，也不表示完整网络矩阵已复跑。
+- 2026-07-22 的首次导航修复把默认 SSO/团委规则随安装包作为启用的静态 DNR 规则交给 Chromium，并为可选全 CQU 模式加入默认关闭、仅在权限和设置开启后启用的静态规则集。停用内置规则时还会保留高优先级动态 allow 防护，覆盖静态规则状态在 worker/扩展边界重新加载的窗口。loaded-Chromium 自动化确认空动态规则、残缺动态规则和停用规则后的 worker 重启均不会漏改写、重复改写或恢复已停用规则；这仍是本地 fixture 证据，不是新的真实网络 PASS。
 
 | Date | Network | aTrust client | Original URL | Rewritten URL | Login page | Original service preserved | Client session established | Result |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -26,7 +27,8 @@
 
 - 链接点击与服务器 HTTP 302 均从非 SSO 页面发起，最终主框架被扩展改写到 aTrust SSO 主机，CAS `service` 解码值保持不变。
 - 对改写目标执行浏览器后退、再次后退、前进、再次前进，导航在来源页、aTrust 目标与后续页之间稳定切换，没有重复改写循环。
-- 通过 Options 的后台 settings mutation 停用 `core-sso`，停止并重新唤醒真实 MV3 service worker 后，稳定规则 ID 覆盖仍保留，原始 SSO 地址不再改写。
+- 通过 Options 的后台 settings mutation 停用 `core-sso`，确认静态规则 ID 已禁用、动态重定向已移除且持久 allow 防护已安装；停止并重新唤醒真实 MV3 service worker 后，原始 SSO 地址仍不改写。
+- 默认 SSO/团委规则在安装包内预置，因此首次导航不再依赖 service worker 先完成动态规则重建；自动化同时断言浏览器只产生一次目标导航。
 - 权限拒绝的确定性状态变化由单元测试覆盖；Chromium 浏览器 chrome 中的真实拒绝按钮用 `CQU_E2E_PERMISSION_DENIAL_GATE=1 CQU_E2E_HEADED=1 pnpm exec playwright test --grep "after prompt rejection" --timeout=120000` 人工执行。操作员必须在唯一的“全部 CQU 域名”原生提示中点击拒绝；用例随后断言开关关闭、通配权限不存在且核心 SSO 仍改写。
 - 上述自动化不提交凭据、不建立真实客户端业务会话，也不能替代校园网/校外网的真实登录回调验证。团委规则已获得后续用户使用确认；2026-07-12 的 HTTP 412 只代表当时测试网络的历史结果。
 

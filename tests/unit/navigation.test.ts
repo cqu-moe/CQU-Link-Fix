@@ -61,6 +61,10 @@ describe('all-CQU navigation decision', () => {
     ['password', 'https://user:secret@foo.cqu.edu.cn/path'],
     ['aTrust gateway', 'https://atrust.cqu.edu.cn/portal/#!/login'],
     ['aTrust destination', 'https://foo-cqu-edu-cn-s.atrust.cqu.edu.cn/path'],
+    [
+      'Youth public rewrite target',
+      'https://youth.cqu.edu.cn/content.jsp?urltype=news.NewsContentUrl&wbtreeid=1009&wbnewsid=24264',
+    ],
     ['IPv4 literal', 'https://1.1.1.1/path'],
     ['non-CQU host', 'https://example.com/path'],
     ['CQU lookalike', 'https://foo.cqu.edu.cn.evil.example/path'],

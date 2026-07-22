@@ -12,6 +12,7 @@ import {
 } from '../../src/rules/dnr';
 import { DEFAULT_SETTINGS, saveSettings } from '../../src/storage/settings';
 import type { CustomRule, RuleDefinition } from '../../src/rules/types';
+import { resetFakeBrowser } from './fake-browser-helpers';
 
 const MAIN_FRAME = ['main_frame'] as const;
 
@@ -21,6 +22,12 @@ type RegexSupport = (
 type GetDynamicRules = () => Promise<Browser.declarativeNetRequest.Rule[]>;
 type UpdateDynamicRules = (
   options: Browser.declarativeNetRequest.UpdateRuleOptions,
+) => Promise<void>;
+type UpdateStaticRules = (
+  options: Browser.declarativeNetRequest.UpdateStaticRulesOptions,
+) => Promise<void>;
+type UpdateEnabledRulesets = (
+  options: Browser.declarativeNetRequest.UpdateRulesetOptions,
 ) => Promise<void>;
 type UpdateTab = (
   tabId: number | undefined,
@@ -46,6 +53,24 @@ function mockGetDynamicRules(): MockInstance<GetDynamicRules> {
 
 function mockUpdateDynamicRules(): MockInstance<UpdateDynamicRules> {
   return vi.spyOn(browser.declarativeNetRequest, 'updateDynamicRules') as unknown as MockInstance<UpdateDynamicRules>;
+}
+
+function mockUpdateStaticRules(): MockInstance<UpdateStaticRules> {
+  const mock = vi.fn<UpdateStaticRules>();
+  Object.defineProperty(browser.declarativeNetRequest, 'updateStaticRules', {
+    configurable: true,
+    value: mock,
+  });
+  return mock;
+}
+
+function mockUpdateEnabledRulesets(): MockInstance<UpdateEnabledRulesets> {
+  const mock = vi.fn<UpdateEnabledRulesets>();
+  Object.defineProperty(browser.declarativeNetRequest, 'updateEnabledRulesets', {
+    configurable: true,
+    value: mock,
+  });
+  return mock;
 }
 
 function mockUpdateTab(): MockInstance<UpdateTab> {
@@ -388,6 +413,27 @@ describe('DNR compilation', () => {
     expect(matchesRegex(allows[0]!, 'https://sso.cqu.edu.cn.evil.example/login')).toBe(false);
   });
 
+  it('keeps a persistent allow guard for disabled packaged rules below custom redirects', () => {
+    const custom = createYouthHostRule();
+    const compiled = compileDynamicRules(
+      [custom],
+      [],
+      ['core-sso', 'addon-youth-public'],
+    );
+    const guards = compiled.filter(
+      (rule) => rule.action.type === 'allow' && rule.priority === 50_000,
+    );
+    const customRedirect = compiled.find((rule) => rule.id === custom.dnrId)!;
+
+    expect(guards.map((rule) => rule.id)).toEqual([900_001, 900_002]);
+    expect(matchesRegex(guards[0]!, 'https://sso.cqu.edu.cn/login')).toBe(true);
+    expect(matchesRegex(
+      guards[1]!,
+      'https://youth.cqu.edu.cn/info/1009/24264.htm',
+    )).toBe(true);
+    expect(customRedirect.priority).toBeGreaterThan(guards[1]!.priority!);
+  });
+
   it('rejects collisions across derived, exclusion, and registered rule IDs', () => {
     const collidingRule = { ...createIpRule(8000), dnrId: 80_000 };
 
@@ -471,7 +517,71 @@ describe('persisted DNR compiler trust boundary', () => {
 });
 
 describe('DNR reconciliation', () => {
-  beforeEach(() => fakeBrowser.reset());
+  beforeEach(resetFakeBrowser);
+
+  it('keeps packaged built-in rules synchronized with disabled settings', async () => {
+    mockRegexSupport().mockResolvedValue({ isSupported: true });
+    mockGetDynamicRules().mockResolvedValue([]);
+    mockUpdateDynamicRules().mockResolvedValue();
+    const updateStaticRules = mockUpdateStaticRules().mockResolvedValue();
+
+    await reconcileDynamicRules({
+      ...DEFAULT_SETTINGS,
+      disabledRuleIds: ['core-sso'],
+    });
+
+    expect(updateStaticRules).toHaveBeenCalledWith({
+      rulesetId: 'built_in_defaults',
+      disableRuleIds: [1001],
+      enableRuleIds: [2001],
+    });
+
+    await reconcileDynamicRules({ ...DEFAULT_SETTINGS, enabled: false });
+    expect(updateStaticRules).toHaveBeenLastCalledWith({
+      rulesetId: 'built_in_defaults',
+      disableRuleIds: [1001, 2001],
+      enableRuleIds: [],
+    });
+
+    await reconcileDynamicRules(DEFAULT_SETTINGS);
+    expect(updateStaticRules).toHaveBeenLastCalledWith({
+      rulesetId: 'built_in_defaults',
+      disableRuleIds: [],
+      enableRuleIds: [1001, 2001],
+    });
+  });
+
+  it('persists the all-CQU static ruleset only while the mode is active', async () => {
+    mockRegexSupport().mockResolvedValue({ isSupported: true });
+    mockGetDynamicRules().mockResolvedValue([]);
+    mockUpdateDynamicRules().mockResolvedValue();
+    const updateEnabledRulesets = mockUpdateEnabledRulesets().mockResolvedValue();
+
+    await reconcileDynamicRules({
+      ...DEFAULT_SETTINGS,
+      enableAllCquDomains: true,
+    });
+    expect(updateEnabledRulesets).toHaveBeenLastCalledWith({
+      enableRulesetIds: ['all_cqu_domains'],
+      disableRulesetIds: [],
+    });
+
+    await reconcileDynamicRules(DEFAULT_SETTINGS);
+    expect(updateEnabledRulesets).toHaveBeenLastCalledWith({
+      enableRulesetIds: [],
+      disableRulesetIds: ['all_cqu_domains'],
+    });
+
+    await reconcileDynamicRules({
+      ...DEFAULT_SETTINGS,
+      enabled: false,
+      enableAllCquDomains: true,
+    });
+    expect(updateEnabledRulesets).toHaveBeenLastCalledWith({
+      enableRulesetIds: [],
+      disableRulesetIds: ['all_cqu_domains'],
+    });
+  });
 
   it('validates every redirect regex before replacing all current dynamic rules', async () => {
     await saveSettings(DEFAULT_SETTINGS);
@@ -543,7 +653,7 @@ describe('DNR reconciliation', () => {
 });
 
 describe('background reconciliation hooks', () => {
-  beforeEach(() => fakeBrowser.reset());
+  beforeEach(resetFakeBrowser);
 
   it('runs at startup and install without redundant storage-change reconciliation', async () => {
     const isRegexSupported = mockRegexSupport().mockResolvedValue({ isSupported: true });
@@ -768,7 +878,7 @@ describe('background reconciliation hooks', () => {
     );
   });
 
-  it('manually completes a built-in rewrite that starts before fresh-worker DNR readiness', async () => {
+  it('lets the packaged static rule handle a built-in rewrite before dynamic DNR readiness', async () => {
     await saveSettings(DEFAULT_SETTINGS);
     mockRegexSupport().mockResolvedValue({ isSupported: true });
     mockGetDynamicRules().mockResolvedValue([]);
@@ -783,9 +893,9 @@ describe('background reconciliation hooks', () => {
     expect(updateTab).not.toHaveBeenCalled();
     startup.resolve();
 
-    await vi.waitFor(() => expect(updateTab).toHaveBeenCalledWith(7, {
-      url: 'https://sso-cqu-edu-cn-s.atrust.cqu.edu.cn/login',
-    }));
+    await startup.promise;
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(updateTab).not.toHaveBeenCalled();
   });
 
   it('does not manually compete with persisted DNR during a worker restart', async () => {
@@ -825,7 +935,7 @@ describe('background reconciliation hooks', () => {
             },
           }
         : rule)],
-  ])('manually completes an early SSO navigation when persisted DNR has %s', async (_label, select) => {
+  ])('lets packaged static SSO handle an early navigation when dynamic DNR has %s', async (_label, select) => {
     await saveSettings(DEFAULT_SETTINGS);
     mockRegexSupport().mockResolvedValue({ isSupported: true });
     const persisted = select(compileDynamicRules(BUILT_IN_RULES, []));
@@ -840,15 +950,15 @@ describe('background reconciliation hooks', () => {
     );
     startup.resolve();
 
-    await vi.waitFor(() => expect(updateTab).toHaveBeenCalledWith(7, {
-      url: 'https://sso-cqu-edu-cn-s.atrust.cqu.edu.cn/login',
-    }));
+    await startup.promise;
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(updateTab).not.toHaveBeenCalled();
   });
 });
 
 describe('queried Youth navigation routing', () => {
   beforeEach(() => {
-    fakeBrowser.reset();
+    resetFakeBrowser();
     fakeBrowser.webNavigation.onBeforeNavigate.removeAllListeners();
   });
 
@@ -1103,7 +1213,7 @@ describe('queried Youth navigation routing', () => {
 
 describe('unified top-frame navigation routing', () => {
   beforeEach(() => {
-    fakeBrowser.reset();
+    resetFakeBrowser();
     fakeBrowser.webNavigation.onBeforeNavigate.removeAllListeners();
   });
 

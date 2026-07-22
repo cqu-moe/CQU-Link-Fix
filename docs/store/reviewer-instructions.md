@@ -12,18 +12,18 @@
 
 ### 测试 1：SSO 顶层链接修正
 
-1. 在新标签页打开：`https://sso.cqu.edu.cn/login?service=https%3A%2F%2Fclient.example%2Fcallback`
-2. 观察地址栏。扩展应只把外层主机修正为 `sso-cqu-edu-cn-s.atrust.cqu.edu.cn`，并保留路径、查询参数以及解码后的 `service=https://client.example/callback`。
-3. 打开扩展弹窗，应看到本次改写状态和对应的 SSO 规则。
+1. 在普通的新标签页中打开：`https://sso.cqu.edu.cn/login?service=https%3A%2F%2Fclient.example%2Fcallback`
+2. 等待本次导航完成后观察地址栏。扩展应只把外层主机修正为 `sso-cqu-edu-cn-s.atrust.cqu.edu.cn`，并保留路径、查询参数以及解码后的 `service=https://client.example/callback`。
+3. 导航完成后再打开扩展弹窗，应看到本次改写状态和对应的 SSO 规则。
 4. 点击“原地址打开一次”，该标签页应返回原始 `sso.cqu.edu.cn` 地址，并且这一轮不再次改写。
 
 目标站点的最终 HTTP 响应可能受重庆大学服务、审核网络位置或 aTrust 状态影响。可审核的核心行为是地址转换、参数保留、本地状态和一次性回退；扩展不会代替目标站点完成登录。
 
 ### 测试 2：团委文章链接结构修正
 
-1. 打开公开示例：`https://youth.cqu.edu.cn/info/1009/24264.htm`
-2. 地址应被修正到同一站点的 `/content.jsp`，并生成与原路径对应的 `urltype=news.NewsContentUrl`、`wbtreeid=1009` 和 `wbnewsid=24264` 参数。
-3. 打开弹窗，应显示“团委官网链接”。
+1. 在普通的新标签页中打开公开示例：`https://youth.cqu.edu.cn/info/1009/24264.htm`
+2. 等待导航完成；地址应被修正到同一站点的 `/content.jsp`，并生成与原路径对应的 `urltype=news.NewsContentUrl`、`wbtreeid=1009` 和 `wbnewsid=24264` 参数。
+3. 导航完成后再打开弹窗，应显示“团委官网链接”。
 4. 可以再次测试“原地址打开一次”。
 
 该规则已由用户在实际使用中确认可用；外部页面的响应仍可能随站点防护或网络环境变化。
@@ -55,18 +55,18 @@
 
 ### Test 1: top-level SSO link repair
 
-1. Open `https://sso.cqu.edu.cn/login?service=https%3A%2F%2Fclient.example%2Fcallback` in a new tab.
-2. The outer host should change to `sso-cqu-edu-cn-s.atrust.cqu.edu.cn`. The path, query parameters, and decoded `service=https://client.example/callback` value must remain unchanged.
-3. Open the extension popup. It should show the rewrite and the matching SSO rule.
+1. Open `https://sso.cqu.edu.cn/login?service=https%3A%2F%2Fclient.example%2Fcallback` in a normal new tab.
+2. Wait for that navigation to finish. The outer host should change to `sso-cqu-edu-cn-s.atrust.cqu.edu.cn`. The path, query parameters, and decoded `service=https://client.example/callback` value must remain unchanged.
+3. Open the extension popup after navigation finishes. It should show the rewrite and the matching SSO rule.
 4. Select the one-time original-URL action. The tab should return to the original `sso.cqu.edu.cn` URL without being rewritten again for that navigation.
 
 The destination HTTP response can depend on Chongqing University services, the reviewer's network location, or aTrust. The reviewable core behavior is URL transformation, parameter preservation, local status, and one-time rollback. The extension does not perform login on behalf of the user.
 
 ### Test 2: Youth League article structure repair
 
-1. Open `https://youth.cqu.edu.cn/info/1009/24264.htm`.
-2. The path should change to `/content.jsp`, with `urltype=news.NewsContentUrl`, `wbtreeid=1009`, and `wbnewsid=24264` generated from the source path.
-3. The popup should show the Youth League rule.
+1. Open `https://youth.cqu.edu.cn/info/1009/24264.htm` in a normal new tab.
+2. Wait for navigation to finish. The path should change to `/content.jsp`, with `urltype=news.NewsContentUrl`, `wbtreeid=1009`, and `wbnewsid=24264` generated from the source path.
+3. Open the popup after navigation finishes. It should show the Youth League rule.
 4. The one-time original-URL action can be tested again.
 
 The rule has been confirmed in normal user operation. The external page response may still vary with site protection or network conditions.
@@ -87,4 +87,3 @@ The rule has been confirmed in normal user operation. The external page response
 ### Security boundary
 
 The extension handles only top-level HTTP(S) navigation. It does not read page content, request bodies, Cookies, passwords, verification codes, or CAS ticket values. If a top-level URL contains a `ticket` parameter, the extension checks only its presence and skips rewriting without reading or storing its value.
-

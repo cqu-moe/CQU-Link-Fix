@@ -24,6 +24,7 @@ import {
   saveSettings,
   updateSettings,
 } from '../../src/storage/settings';
+import { resetFakeBrowser } from './fake-browser-helpers';
 
 type RegexSupport = (
   options: Browser.declarativeNetRequest.RegexOptions,
@@ -192,7 +193,7 @@ function resetBackgroundEvents(): void {
 
 describe('rewrite session state', () => {
   beforeEach(() => {
-    fakeBrowser.reset();
+    resetFakeBrowser();
     resetBackgroundEvents();
   });
 
@@ -425,7 +426,7 @@ describe('rewrite session state', () => {
 
 describe('background rewrite recording and bypass', () => {
   beforeEach(() => {
-    fakeBrowser.reset();
+    resetFakeBrowser();
     resetBackgroundEvents();
   });
 
@@ -499,7 +500,7 @@ describe('background rewrite recording and bypass', () => {
     ];
 
     for (const testCase of cases) {
-      fakeBrowser.reset();
+      resetFakeBrowser();
       resetBackgroundEvents();
       await saveSettings(testCase.settings);
       const order: string[] = [];
@@ -580,7 +581,7 @@ describe('background rewrite recording and bypass', () => {
 
 describe('background session lifecycle, errors, and messages', () => {
   beforeEach(() => {
-    fakeBrowser.reset();
+    resetFakeBrowser();
     resetBackgroundEvents();
   });
 
@@ -1723,7 +1724,7 @@ describe('background session lifecycle, errors, and messages', () => {
 });
 
 describe('exclude current host', () => {
-  beforeEach(() => fakeBrowser.reset());
+  beforeEach(resetFakeBrowser);
 
   it('normalizes and deduplicates exclusions from a valid stored HTTP(S) original', async () => {
     await saveSettings({

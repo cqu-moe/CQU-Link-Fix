@@ -21,6 +21,20 @@ export default defineConfig({
       'https://sso-cqu-edu-cn-s.atrust.cqu.edu.cn/*',
     ],
     optional_host_permissions: ['*://cqu.edu.cn/*', '*://*.cqu.edu.cn/*'],
+    declarative_net_request: {
+      rule_resources: [
+        {
+          id: 'built_in_defaults',
+          enabled: true,
+          path: 'rules/builtins.json',
+        },
+        {
+          id: 'all_cqu_domains',
+          enabled: false,
+          path: 'rules/all-cqu-domains.json',
+        },
+      ],
+    },
     icons: {
       '16': 'icon/16.png',
       '32': 'icon/32.png',

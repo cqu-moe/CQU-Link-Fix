@@ -240,6 +240,19 @@ test.describe('service-worker startup fallback boundary', () => {
     expect(await countSsoTargetNavigations(extension, { clearDynamicRules: true })).toBe(1);
   });
 
+  test('lets a CAS ticket callback through before dynamic DNR is rebuilt', async ({ extension }) => {
+    const restart = await beginExtensionWorkerRestart(extension, { clearDynamicRules: true });
+    const page = await extension.context.newPage();
+    const original = 'https://sso.cqu.edu.cn/login?state=x&ticket=cold-start';
+
+    await page.goto(original);
+    await restart.restarted;
+
+    expect(page.url()).toBe(original);
+    const tabId = await activeTabId(extension, page);
+    await expect.poll(() => rewriteRecord(extension, tabId)).toBeNull();
+  });
+
   test('does not double-navigate when persisted DNR survives a worker restart', async ({ extension }) => {
     expect(await countSsoTargetNavigations(extension, { clearDynamicRules: false })).toBe(1);
   });
@@ -256,17 +269,35 @@ test.describe('service-worker startup fallback boundary', () => {
     await expect(options.locator('#status')).toContainText('设置已加载');
     await options.locator('[data-rule-id="core-sso"]').click();
     await expect(options.locator('[data-rule-id="core-sso"]')).not.toBeChecked();
+    await expect(options.locator('#status')).toContainText('已停用 统一身份认证');
     await expect.poll(() => options.evaluate(async () => {
       const stored = await chrome.storage.local.get('settings');
       return (stored.settings as { disabledRuleIds?: string[] } | undefined)
         ?.disabledRuleIds ?? [];
     })).toContain('core-sso');
+    await expect.poll(() => options.evaluate(() =>
+      chrome.declarativeNetRequest.getDisabledRuleIds({ rulesetId: 'built_in_defaults' }),
+    )).toContain(1001);
+    await expect.poll(() => options.evaluate(() =>
+      chrome.declarativeNetRequest.getDynamicRules().then((rules) =>
+        rules.map((rule) => rule.id)),
+    )).not.toContain(1001);
 
     const restart = await beginExtensionWorkerRestart(extension, { clearDynamicRules: false });
     const page = await extension.context.newPage();
     const original = 'https://sso.cqu.edu.cn/login?service=%2Fupgrade';
     await page.goto(original);
     await restart.restarted;
+
+    await expect.poll(() => options.evaluate(() =>
+      chrome.declarativeNetRequest.getDisabledRuleIds({ rulesetId: 'built_in_defaults' }),
+    )).toContain(1001);
+    await expect.poll(() => options.evaluate(() =>
+      chrome.declarativeNetRequest.getDynamicRules().then((rules) =>
+        rules.map((rule) => rule.id)),
+    )).not.toContain(1001);
+    const tabId = await activeTabId(extension, page);
+    await expect.poll(() => rewriteRecord(extension, tabId)).toBeNull();
 
     expect(page.url()).toBe(original);
     await expect.poll(() => options.evaluate(async () => {
