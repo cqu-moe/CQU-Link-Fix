@@ -24,7 +24,7 @@ CQU Link Fix 不需要为 Edge 重写一套代码。当前 WXT 产物已经是 M
 | 检查项 | 现状 | 上架判断 |
 | --- | --- | --- |
 | Manifest | [`wxt.config.ts`](../../wxt.config.ts)声明 Manifest V3；当前生成 Manifest 版本为 0.3.1 | 满足两家商店的 Chromium/MV3 技术基础 |
-| 发布包 | 0.3.1 将生成 `.output/cqu-link-fix-0.3.1-chrome.zip`；`manifest.json` 位于 ZIP 根目录 | 正式提交前必须重新构建、测试和校验 |
+| 发布包 | 已生成并检查 `.output/cqu-link-fix-0.3.1-chrome.zip`；`manifest.json` 位于 ZIP 根目录 | 可作为双商店候选包；哈希与验证记录见提交清单 |
 | 权限 | `storage`、`activeTab`、`declarativeNetRequestWithHostAccess`、`webNavigation`，以及精确必需/可选主机权限 | 权限范围已经相对克制，但后台必须逐项解释用途；Microsoft 官方权限表支持这些权限。[Edge 权限表](https://learn.microsoft.com/en-us/microsoft-edge/extensions/developer-guide/declare-permissions) |
 | 远程代码 | 当前 JS、React、字体和图片均随 ZIP 打包，Manifest 未声明远程执行入口 | 提交时应选择“不使用远程代码”；MV3 禁止加载并执行远程托管代码。[Chrome MV3 远程代码规则](https://developer.chrome.com/docs/extensions/develop/migrate/what-is-mv3)；[Edge 发布隐私字段](https://learn.microsoft.com/en-us/microsoft-edge/extensions/publish/publish-extension#declare-any-use-of-remote-code) |
 | Edge 迁移 | 当前 Manifest 没有 `update_url`，名称/描述也不含 “Chrome”；生产包已在本机 Microsoft Edge 加载并完成规则、设置页和弹窗烟测 | 不需要 Edge 专用源码分支；提交前仍建议人工复核原生可选权限提示。[Edge 移植指南](https://learn.microsoft.com/en-us/microsoft-edge/extensions/developer-guide/port-chrome-extension) |

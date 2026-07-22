@@ -94,14 +94,14 @@ Chrome 开发者账号已由维护者注册。提交时：
 
 | 项目 | 结果 |
 | --- | --- |
-| 候选包来源提交 | `PENDING` |
+| 候选包来源提交 | `9900e93` |
 | ZIP | `.output/cqu-link-fix-0.3.1-chrome.zip` |
-| SHA-256 | `PENDING` |
-| `pnpm verify` | `PENDING` |
-| Chromium 扩展 E2E | `PENDING` |
-| 首次导航边界 | `PENDING` |
+| SHA-256 | `f5c01d4a6e8d9495c062459bb22a1f991296c517be3bfc46868f63fe6879d3b2` |
+| `pnpm verify` | PASS：22 个测试文件、468 项测试通过，类型检查与生产构建通过 |
+| Chromium 扩展 E2E | PASS：21 项通过；2 项原生可选权限批准/拒绝人工门禁按设计跳过 |
+| 首次导航边界 | PASS：空动态规则、残缺动态规则、CAS ticket 放行与停用规则后的 worker 重启均通过真实 Chromium 自动化 |
 | Microsoft Edge 侧载烟测 | PENDING：此前版本已通过；0.3.1 仍需重新侧载确认 |
-| ZIP 完整性 | `PENDING` |
+| ZIP 完整性 | PASS：`unzip -t` 无错误，Manifest 与两份静态规则文件均位于包内 |
 
 下方 0.3.0 候选包已被当前版本取代，不得再上传旧 SHA-256 对应文件。
 
