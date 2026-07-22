@@ -25,13 +25,13 @@ describe('production design system package', () => {
     ]);
   });
 
-  it('bumps the redesign release and wires runtime icons into the manifest', async () => {
+  it('keeps the current release and wires runtime icons into the manifest', async () => {
     const packageJson = JSON.parse(
       await readFile(resolve(root, 'package.json'), 'utf8'),
     ) as { version: string };
     const config = await readFile(resolve(root, 'wxt.config.ts'), 'utf8');
 
-    expect(packageJson.version).toBe('0.3.0');
+    expect(packageJson.version).toBe('0.3.1');
     expect(config).toContain("'16': 'icon/16.png'");
     expect(config).toContain("'128': 'icon/128.png'");
     expect(config).toContain('default_icon');

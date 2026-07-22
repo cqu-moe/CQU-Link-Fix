@@ -1,6 +1,6 @@
 # CQU Link Fix
 
-面向 Chromium 的重庆大学链接修正扩展。当前版本为 **0.3.0**，弹窗与设置页使用 React 19，底层规则、权限、存储与 service worker 保持 TypeScript / WXT 实现。真实网络验证证据目前为 **PARTIAL**；团委规则已获用户实际使用确认，完整 SSO 登录回调与校园网/校外网矩阵仍未形成可复现记录，详见[真实网络烟测记录](docs/validation/live-smoke.md)。
+面向 Chromium 的重庆大学链接修正扩展。当前版本为 **0.3.1**，弹窗与设置页使用 React 19，底层规则、权限、存储与 service worker 保持 TypeScript / WXT 实现。真实网络验证证据目前为 **PARTIAL**；团委规则已获用户实际使用确认，完整 SSO 登录回调与校园网/校外网矩阵仍未形成可复现记录，详见[真实网络烟测记录](docs/validation/live-smoke.md)。
 
 ## 默认功能
 

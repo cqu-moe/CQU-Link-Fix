@@ -5,7 +5,7 @@
 - 项目主页：https://github.com/cqu-moe/CQU-Link-Fix
 - 支持地址：https://github.com/cqu-moe/CQU-Link-Fix/issues
 - 隐私政策：https://github.com/cqu-moe/CQU-Link-Fix/blob/main/PRIVACY.md
-- Manifest 版本：0.3.0
+- Manifest 版本：0.3.1
 - 主语言：简体中文
 - 英文本地化：已包含
 - 建议分类：Productivity / 生产力工具
@@ -36,8 +36,8 @@ pnpm verify
 pnpm test:e2e
 pnpm store:assets
 pnpm zip
-unzip -t .output/cqu-link-fix-0.3.0-chrome.zip
-shasum -a 256 .output/cqu-link-fix-0.3.0-chrome.zip
+unzip -t .output/cqu-link-fix-0.3.1-chrome.zip
+shasum -a 256 .output/cqu-link-fix-0.3.1-chrome.zip
 ```
 
 然后用同一个 ZIP 解压产物分别在 Chrome 与 Edge 侧载，检查：
@@ -56,7 +56,7 @@ shasum -a 256 .output/cqu-link-fix-0.3.0-chrome.zip
 
 Chrome 开发者账号已由维护者注册。提交时：
 
-- [ ] `Add new item` 上传 `.output/cqu-link-fix-0.3.0-chrome.zip`
+- [ ] `Add new item` 上传 `.output/cqu-link-fix-0.3.1-chrome.zip`
 - [ ] Store Listing 粘贴 `listing-copy.md` 的中文内容并添加英文 locale
 - [ ] 上传 `public/icon/128.png`
 - [ ] 上传两张 1280×800 截图和 440×280 小宣传图
@@ -90,20 +90,20 @@ Chrome 开发者账号已由维护者注册。提交时：
 
 ## 发布证据
 
-### 2026-07-22 首次导航修复候选包（当前）
+### 2026-07-22 版本 0.3.1 候选包（当前）
 
 | 项目 | 结果 |
 | --- | --- |
-| 候选包来源提交 | `16046b7` |
-| ZIP | `.output/cqu-link-fix-0.3.0-chrome.zip` |
-| SHA-256 | `c86629d813c25e94177cee0f5cfb0af3ef1d633ca628c303083a42e759dc4906` |
-| `pnpm verify` | PASS：22 个测试文件、468 项测试通过，类型检查与生产构建通过 |
-| Chromium 扩展 E2E | PASS：21 项通过；2 项原生可选权限批准/拒绝人工门禁按设计跳过 |
-| 首次导航边界 | PASS：空动态规则、残缺动态规则、CAS ticket 放行与停用规则后的 worker 重启均通过真实 Chromium 自动化 |
-| Microsoft Edge 侧载烟测 | PENDING：此前版本已通过；当前修复包仍需重新侧载确认 |
-| ZIP 完整性 | PASS：`unzip -t` 无错误，Manifest 与两份静态规则文件均位于包内 |
+| 候选包来源提交 | `PENDING` |
+| ZIP | `.output/cqu-link-fix-0.3.1-chrome.zip` |
+| SHA-256 | `PENDING` |
+| `pnpm verify` | `PENDING` |
+| Chromium 扩展 E2E | `PENDING` |
+| 首次导航边界 | `PENDING` |
+| Microsoft Edge 侧载烟测 | PENDING：此前版本已通过；0.3.1 仍需重新侧载确认 |
+| ZIP 完整性 | `PENDING` |
 
-下方首轮候选包已被当前修复包取代，不得再上传旧 SHA-256 对应文件。
+下方 0.3.0 候选包已被当前版本取代，不得再上传旧 SHA-256 对应文件。
 
 ### 2026-07-22 首轮候选包（已取代）
 

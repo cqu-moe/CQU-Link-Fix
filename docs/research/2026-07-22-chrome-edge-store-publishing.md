@@ -2,7 +2,7 @@
 
 > 核对日期：2026-07-22
 >
-> 适用版本：CQU Link Fix 0.3.0，Chromium Manifest V3
+> 适用版本：CQU Link Fix 0.3.1，Chromium Manifest V3
 >
 > 来源范围：仅使用 Chrome Developers / Google 官方资料和 Microsoft Learn / Partner Center 官方资料。商店后台可能继续调整字段，以实际账号中显示的表单为最终准绳。
 
@@ -13,7 +13,7 @@ CQU Link Fix 不需要为 Edge 重写一套代码。当前 WXT 产物已经是 M
 项目的 ZIP 技术基础已经满足双商店要求。本轮发布准备已完成 Manifest 本地化、双语隐私政策、商店文案、审核说明、草稿素材、Chromium 全量自动化和 Microsoft Edge 侧载烟测。正式提交前还要处理以下现场事项：
 
 1. [真实网络烟测记录](../validation/live-smoke.md)中的 2026-07-12 团委 HTTP 412 是特定网络会话的历史结果；2026-07-22 用户已确认团委规则在实际使用中正常工作，因此它不再作为当前已知坏链接。完整 CAS 登录回调与校园网/校外网矩阵仍缺少可复现记录；仓库已经准备了无需个人凭据的审核步骤，并明确区分 URL 转换与目标站点响应。[Edge 开发者政策 1.1.3 与 1.3](https://learn.microsoft.com/en-us/legal/microsoft-edge/extensions/developer-policies#113-functionality)；[Chrome 发布前准备](https://developer.chrome.com/docs/webstore/prepare)
-2. 仓库当前仍为私有。根目录 `PRIVACY.md` 已完成，但 `https://github.com/cqu-moe/CQU-Link-Fix/blob/main/PRIVACY.md` 只有在维护者公开仓库并从未登录窗口复核后，才能作为稳定、无需登录的隐私政策 URL。
+2. 仓库已公开，根目录 `PRIVACY.md`、Issues 与项目主页已经完成无需登录的访问复核，可作为首次提交使用的项目与隐私政策 URL。
 3. 两张 1280×800 截图、440×280 小宣传图和 300×300 Edge Logo 已生成，明天由维护者决定直接使用还是调整第二版。
 4. Chrome 账号已由维护者注册；两步验证、联系邮箱、Trader/Non-Trader、分发地区和 Edge program 账号类型仍需在实际后台核对或选择。
 
@@ -23,14 +23,14 @@ CQU Link Fix 不需要为 Edge 重写一套代码。当前 WXT 产物已经是 M
 
 | 检查项 | 现状 | 上架判断 |
 | --- | --- | --- |
-| Manifest | [`wxt.config.ts`](../../wxt.config.ts)声明 Manifest V3；当前生成 Manifest 版本为 0.3.0 | 满足两家商店的 Chromium/MV3 技术基础 |
-| 发布包 | 已检查 `.output/cqu-link-fix-0.3.0-chrome.zip`；`manifest.json` 位于 ZIP 根目录，包约 226 KiB | 可作为双商店候选包；正式提交前必须重新构建、测试和校验 |
+| Manifest | [`wxt.config.ts`](../../wxt.config.ts)声明 Manifest V3；当前生成 Manifest 版本为 0.3.1 | 满足两家商店的 Chromium/MV3 技术基础 |
+| 发布包 | 0.3.1 将生成 `.output/cqu-link-fix-0.3.1-chrome.zip`；`manifest.json` 位于 ZIP 根目录 | 正式提交前必须重新构建、测试和校验 |
 | 权限 | `storage`、`activeTab`、`declarativeNetRequestWithHostAccess`、`webNavigation`，以及精确必需/可选主机权限 | 权限范围已经相对克制，但后台必须逐项解释用途；Microsoft 官方权限表支持这些权限。[Edge 权限表](https://learn.microsoft.com/en-us/microsoft-edge/extensions/developer-guide/declare-permissions) |
 | 远程代码 | 当前 JS、React、字体和图片均随 ZIP 打包，Manifest 未声明远程执行入口 | 提交时应选择“不使用远程代码”；MV3 禁止加载并执行远程托管代码。[Chrome MV3 远程代码规则](https://developer.chrome.com/docs/extensions/develop/migrate/what-is-mv3)；[Edge 发布隐私字段](https://learn.microsoft.com/en-us/microsoft-edge/extensions/publish/publish-extension#declare-any-use-of-remote-code) |
 | Edge 迁移 | 当前 Manifest 没有 `update_url`，名称/描述也不含 “Chrome”；生产包已在本机 Microsoft Edge 加载并完成规则、设置页和弹窗烟测 | 不需要 Edge 专用源码分支；提交前仍建议人工复核原生可选权限提示。[Edge 移植指南](https://learn.microsoft.com/en-us/microsoft-edge/extensions/developer-guide/port-chrome-extension) |
 | 商店素材 | 128/300 px Logo、两张 1280×800 截图和 440×280 小宣传图已生成 | 首轮草稿完成；维护者明天复核视觉后即可上传或重生成 |
 | 隐私政策 | 根目录中英双语 `PRIVACY.md` 已完成 | 内容完成；仓库公开后必须从未登录窗口确认 URL 可访问 |
-| 发布验收 | 22 个单测文件共 462 项通过，Chromium E2E 20 项通过、2 项原生权限人工门禁跳过；Edge 侧载烟测通过 | 技术候选包已形成；完整 SSO 网络矩阵仍属于证据边界 |
+| 发布验收 | 0.3.1 的自动化、ZIP 哈希与 Edge 侧载结果以提交清单中的最新候选包记录为准 | 完整 SSO 网络矩阵仍属于证据边界 |
 
 ### Edge 功能性政策要求准确描述证据边界
 
