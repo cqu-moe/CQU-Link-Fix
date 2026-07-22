@@ -20,12 +20,12 @@
 - [x] 团委规则实际使用确认与历史网络测试证据边界已分开记录
 - [x] 自动生成草稿素材的脚本与固定文件名
 
-## 明天公开仓库后先做
+## 仓库公开核对
 
-- [ ] 将 `cqu-moe/CQU-Link-Fix` 从 Private 改为 Public，不改变默认分支和历史
-- [ ] 退出 GitHub 登录或使用无痕窗口，确认项目主页、Issues 和 `PRIVACY.md` 均无需登录即可访问
-- [ ] 确认默认分支是 `main`，隐私政策 URL 能直接显示中英文正文
-- [ ] 复核草稿截图和宣传图，决定直接使用还是调整文案/配色后重生成
+- [x] 将 `cqu-moe/CQU-Link-Fix` 从 Private 改为 Public，不改变默认分支和历史
+- [x] 退出 GitHub 登录或使用无痕窗口，确认项目主页、Issues 和 `PRIVACY.md` 均无需登录即可访问
+- [x] 确认默认分支是 `main`，隐私政策 URL 能直接显示中英文正文
+- [x] 复核草稿截图和宣传图，并采用当前素材完成 Chrome 首次提交
 
 ## 发布候选包验证
 
@@ -56,17 +56,18 @@ shasum -a 256 .output/cqu-link-fix-0.3.1-chrome.zip
 
 Chrome 开发者账号已由维护者注册。提交时：
 
-- [ ] `Add new item` 上传 `.output/cqu-link-fix-0.3.1-chrome.zip`
-- [ ] Store Listing 粘贴 `listing-copy.md` 的中文内容并添加英文 locale
-- [ ] 上传 `public/icon/128.png`
-- [ ] 上传两张 1280×800 截图和 440×280 小宣传图
-- [ ] Privacy 填写 `privacy-and-permissions.md` 的单一用途、权限理由和数据披露
-- [ ] 勾选 Web browsing activity，并按后台定义核对 User-generated content
-- [ ] Remote code 选择 No
-- [ ] 填入公开隐私政策 URL
-- [ ] Test instructions 粘贴 `reviewer-instructions.md`
-- [ ] Distribution、地区、可见性和 Trader/Non-Trader 状态由维护者复核
-- [ ] 首次发布建议选择 deferred publishing，审核通过后先复核商店页再手动上线
+- [x] `Add new item` 上传 `.output/cqu-link-fix-0.3.1-chrome.zip`
+- [x] Store Listing 填写 `listing-copy.md` 的中文内容并添加英文 locale
+- [x] 上传 `public/icon/128.png`
+- [x] 上传两张 1280×800 全局截图和 440×280 小宣传图
+- [x] Privacy 填写 `privacy-and-permissions.md` 的单一用途、权限理由和数据披露
+- [x] 数据类型选择后台当前显示的“网络记录”；后台未提供单独的 User-generated content 字段
+- [x] Remote code 选择 No
+- [x] 填入公开隐私政策 URL
+- [x] Test instructions 填入在后台 500 字限制内压缩的 `reviewer-instructions.md` 核心步骤
+- [x] Distribution 复核为免费、公开、所有地区
+- [ ] Trader/Non-Trader 状态仍需在发布者账号设置中复核
+- [x] 提交时关闭自动发布，使用 deferred publishing；审核通过后先复核商店页再手动上线
 
 ## Microsoft Edge Add-ons
 
@@ -89,6 +90,17 @@ Chrome 开发者账号已由维护者注册。提交时：
 这些是首轮草稿，不含真实账号、学号、Cookie、CAS ticket 或个人浏览信息。
 
 ## 发布证据
+
+### Chrome Web Store 0.3.1 正式提交
+
+| 项目 | 结果 |
+| --- | --- |
+| Item ID | `lfipcjgpmiobfbillddkagjojhkdcbhd` |
+| 提交时间 | 2026-07-22 13:08 CST |
+| 后台状态 | 待审核 |
+| 发布方式 | 延迟发布；审核通过后不自动上线 |
+| 延迟发布期限 | 审核通过后 30 天内手动发布，逾期失效 |
+| 提交包 | 0.3.1，SHA-256 `f5c01d4a6e8d9495c062459bb22a1f991296c517be3bfc46868f63fe6879d3b2` |
 
 ### 2026-07-22 版本 0.3.1 候选包（当前）
 
@@ -117,6 +129,6 @@ Chrome 开发者账号已由维护者注册。提交时：
 | Microsoft Edge 侧载烟测 | PASS：生产扩展加载成功，动态规则就绪，合成 SSO 导航改写成功，真实设置页与弹窗可打开 |
 | ZIP 完整性 | PASS：`unzip -t` 无错误，Manifest 位于根目录，中英文 `_locales` 已包含 |
 
-本记录对应的是首次草稿与技术候选包，不等于商店已提交或已获批准。WXT ZIP 包含本次归档时间信息，因此即使源码不变，重新运行 `pnpm zip` 也可能得到不同的整包 SHA-256；明天若重新打包或修改代码、Manifest、包内资源，必须重新验证并记录实际上传文件的新哈希。
+0.3.1 候选包已提交 Chrome Web Store，但尚未获批或发布。WXT ZIP 包含本次归档时间信息，因此即使源码不变，重新运行 `pnpm zip` 也可能得到不同的整包 SHA-256；若重新打包或修改代码、Manifest、包内资源，必须重新验证并记录实际上传文件的新哈希。
 
-Chrome item ID、Edge product ID、两家提交时间和审核结果只能在维护者完成后台操作后写入正式发布记录，不能提前伪造。
+Edge product ID、提交时间和审核结果只能在维护者完成后台操作后写入正式发布记录，不能提前伪造。
