@@ -45,7 +45,7 @@ jobs:
           zip_file=".output/cqu-link-fix-${version}-chrome.zip"
           checksum_file=".output/cqu-link-fix-checksums.txt"
           test -f "$zip_file"
-          sha256sum "$zip_file" > "$checksum_file"
+          (cd .output && sha256sum "cqu-link-fix-${version}-chrome.zip") > "$checksum_file"
           mkdir -p artifacts/ci
           cp "$zip_file" "$checksum_file" artifacts/ci/
       - name: Upload main extension package
@@ -152,7 +152,7 @@ jobs:
           zip_file=".output/cqu-link-fix-${version}-chrome.zip"
           test -f "$zip_file"
           unzip -t "$zip_file"
-          sha256sum "$zip_file" > "${zip_file}.sha256"
+          (cd .output && sha256sum "cqu-link-fix-${version}-chrome.zip") > "${zip_file}.sha256"
       - name: Create immutable GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
