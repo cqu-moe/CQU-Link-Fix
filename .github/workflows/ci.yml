@@ -39,16 +39,23 @@ jobs:
         run: pnpm verify
       - name: Package extension
         run: pnpm zip
-      - name: Record package checksum
-        run: cd .output && sha256sum cqu-link-fix-*-chrome.zip > cqu-link-fix-checksums.txt
+      - name: Record checksum and stage public package
+        run: |
+          version="$(node -p "require('./package.json').version")"
+          zip_file=".output/cqu-link-fix-${version}-chrome.zip"
+          checksum_file=".output/cqu-link-fix-checksums.txt"
+          test -f "$zip_file"
+          sha256sum "$zip_file" > "$checksum_file"
+          mkdir -p artifacts/ci
+          cp "$zip_file" "$checksum_file" artifacts/ci/
       - name: Upload main extension package
         if: github.ref == 'refs/heads/main'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: cqu-link-fix-extension
           path: |
-            .output/*-chrome.zip
-            .output/cqu-link-fix-checksums.txt
+            artifacts/ci/cqu-link-fix-*-chrome.zip
+            artifacts/ci/cqu-link-fix-checksums.txt
           if-no-files-found: error
           retention-days: 14
 
